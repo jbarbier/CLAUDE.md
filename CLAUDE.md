@@ -10,6 +10,8 @@ Search before building. Test before shipping. Ship the complete thing. When Juli
 
 Time is not an excuse. Fatigue is not an excuse. Complexity is not an excuse. Boil the ocean. This is how we think about shipping.
 
+You can outsource the typing. You cannot outsource the understanding. Before you call anything DONE you must be able to explain why the code is correct and exactly where it would break. Tests passing is not understanding. If you can't walk the failure modes out loud, you're not done, you're guessing.
+
 ## The two machine spaces — read this before doing anything
 
 Every piece of work you do belongs to one of two spaces. Picking the wrong one is the single most common way agents produce bad output.
@@ -24,6 +26,10 @@ Every piece of work you do belongs to one of two spaces. Picking the wrong one i
 
 Every feature, every fix, every investigation starts with: is this latent or deterministic? If the answer is "both," split it. The deterministic piece becomes a script + tests. The latent piece becomes a prompt + eval.
 
+## The context window is the lever
+
+The context window is your only control surface over the model. Treat it as a deliberate input, not a dumping ground. Load the spec, the contract, the relevant files, and concrete examples. Leave the noise out. A vague or bloated context produces vague or bloated output, every time. When a task goes sideways, the first question is "what was in the window," not "was the model dumb." Curate before you prompt.
+
 ## Non-negotiable rules
 
 ### Tests and evals — every time, no exceptions
@@ -35,6 +41,12 @@ Every feature, every fix, every investigation starts with: is this latent or det
 - Two test lanes, different budgets:
   - **Gate tests** — deterministic, local, free, <2s. Run on every commit via pre-commit hook. Never flaky.
   - **Periodic evals** — paid (LLM calls), slower, quality-measuring. Run before ship and nightly. Allowed to be non-deterministic but must have a pass threshold.
+
+### Tie every change to a measurable outcome
+
+- Every feature names the outcome it moves before you build it: the metric, the workflow step, or the user-visible behavior that changes. "It works" is not an outcome.
+- If you can't state what gets measurably better and how you'll see it, that's a Confusion Protocol stop, not a license to build.
+- Wire in the trace. The change leaves evidence you can point at later: a metric, a log line, an eval score. Compute that produces no measurable, traceable result is theater.
 
 ### LLM access — local Claude Code, not the API
 
@@ -63,6 +75,10 @@ Most of the time Layer 1 wins. Default to that. If Layer 3 produces a genuine in
 
 When a task matches a specialized domain (SEO, schema, security audit, design review, etc.), use the installed Claude Code skill. Don't reinvent what gstack or a community skill already does well. Invoke via the Skill tool, not by re-implementing.
 
+### Skillify repeated success, not just failure
+
+Failures get skillified — that rule already stands. So does repeated success. The second time you run the same manual flow by hand, stop and codify it: a script, a skill, or a workflow. One-off prompts don't compound; reusable flows do. The leverage is in the work you stop having to think about, not in re-prompting from scratch each time. Done it twice by hand? The third time is a command.
+
 ## Architecture — services-first, parallel-friendly
 
 Build everything as independent services / self-contained directories. The goal: any single piece of the application can be worked on by a separate Claude Code session without stepping on another session's work.
@@ -75,6 +91,8 @@ Build everything as independent services / self-contained directories. The goal:
 - **Top-level only holds glue.** Root directory: orchestration scripts, shared config, contracts, docs. No business logic.
 
 When in doubt, lean toward more services with sharper boundaries rather than fewer services with fuzzy ones.
+
+**Fan out by default.** The services-first layout exists so work runs in parallel. When a job decomposes into independent units, run them as separate isolated sessions or worktrees at the same time, not one after another. Serial work on parallelizable units is wasted wall-clock. Coordinate at the contract boundary, merge each unit when it's green.
 
 ## Completion status protocol
 
