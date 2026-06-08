@@ -62,11 +62,17 @@ If your tool does not follow symlinks, just copy the file and rename it. The rul
 The file refers to me by name in several places ("impress Julien", "ask Julien", "tell Julien what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
 
 ```bash
-# macOS
-sed -i '' 's/Julien/YOUR_NAME/g' CLAUDE.md
-
-# Linux
-sed -i 's/Julien/YOUR_NAME/g' CLAUDE.md
+# macOS and Linux (idempotent - safe to run multiple times)
+if grep -q "Julien" CLAUDE.md && ! grep -q "YOUR_NAME" CLAUDE.md; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' 's/Julien/YOUR_NAME/g' CLAUDE.md
+    else
+        sed -i 's/Julien/YOUR_NAME/g' CLAUDE.md
+    fi
+    echo "✅ Replaced Julien with YOUR_NAME"
+else
+    echo "ℹ️  Already customized or no replacement needed"
+fi
 ```
 
 While you are in there, decide what else to change:
