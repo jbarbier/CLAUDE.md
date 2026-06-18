@@ -2,8 +2,6 @@
 
 This repo is a single file: [`CLAUDE.md`](./CLAUDE.md). It is the instruction set I give Claude Code (and any other coding agent) at the start of every session. It tells the agent how to think, when to write code instead of guessing, what "done" means, and how to talk to me.
 
-It is opinionated on purpose. Most of the ideas come from [Andrej Karpathy](https://x.com/karpathy) and [Garry Tan](https://x.com/garrytan). Some are mine.
-
 You are meant to copy this, put your own name in it, delete what does not fit your stack, and make it better. Instructions for all three are below.
 
 ---
@@ -59,14 +57,14 @@ If your tool does not follow symlinks, just copy the file and rename it. The rul
 
 ## Make it yours (replace my name)
 
-The file refers to me by name in several places ("impress Julien", "ask Julien", "tell Julien what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
+The file refers to me by name in several places ("impress Azuka", "ask Azuka", "tell Azuka what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
 
 ```bash
 # macOS
-sed -i '' 's/Julien/YOUR_NAME/g' CLAUDE.md
+sed -i '' 's/Azuka/YOUR_NAME/g' CLAUDE.md
 
 # Linux
-sed -i 's/Julien/YOUR_NAME/g' CLAUDE.md
+sed -i 's/Azuka/YOUR_NAME/g' CLAUDE.md
 ```
 
 While you are in there, decide what else to change:
