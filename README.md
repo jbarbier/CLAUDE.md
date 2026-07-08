@@ -59,14 +59,14 @@ If your tool does not follow symlinks, just copy the file and rename it. The rul
 
 ## Make it yours (replace my name)
 
-The file refers to me by name in several places ("impress Julien", "ask Julien", "tell Julien what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
+The file refers to me by name in several places ("impress Lawrence", "ask Lawrence", "tell Lawrence what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
 
 ```bash
 # macOS
-sed -i '' 's/Julien/YOUR_NAME/g' CLAUDE.md
+sed -i '' 's/Lawrence/YOUR_NAME/g' CLAUDE.md
 
 # Linux
-sed -i 's/Julien/YOUR_NAME/g' CLAUDE.md
+sed -i 's/Lawrence/YOUR_NAME/g' CLAUDE.md
 ```
 
 While you are in there, decide what else to change:
