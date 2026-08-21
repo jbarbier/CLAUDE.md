@@ -2,7 +2,7 @@
 
 This repo is a single file: [`CLAUDE.md`](./CLAUDE.md). It is the instruction set I give Claude Code (and any other coding agent) at the start of every session. It tells the agent how to think, when to write code instead of guessing, what "done" means, and how to talk to me.
 
-It is opinionated on purpose. Most of the ideas come from [Andrej Karpathy](https://x.com/karpathy) and [Garry Tan](https://x.com/garrytan). Some are mine.
+It is opinionated on purpose. Most of the ideas come from [Andrej Karpathy](https://x.com/karpathy) and [Garry Tan](https://x.com/garrytan). The fan-out + harsh critic loop is adapted from [Matt Shumer](https://x.com/mattshumer_), who runs it to replicate games (independent builder sub-agents per unit, a separate harsh critic judging blind side by side, loop until perfect); here it is generalized to any work. The self-rating rule (score your own work, loop until proud) comes from a [Nick Stinemates](https://x.com/nickstinemates) tweet. Some are mine.
 
 You are meant to copy this, put your own name in it, delete what does not fit your stack, and make it better. Instructions for all three are below.
 
