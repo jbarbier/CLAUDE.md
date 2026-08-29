@@ -1,0 +1,4 @@
+# EnterWorktree's default location when it creates a worktree inside the repo.
+# Narrow on purpose: .claude/settings.json, .claude/agents/ and .claude/skills/
+# are meant to be committed and shared with the team.
+.claude/worktrees/
