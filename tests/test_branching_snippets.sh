@@ -211,6 +211,60 @@ git worktree add -q -b jbarbier/self-99999999 "$SELF" origin/main
 [ -d "$SELF" ] && ok "refused to delete its own working directory" \
                || bad "deleted the cwd it was running in"
 
+echo "== 11. the sweep sees through a rebase merge (SHA changes, patch does not) =="
+# GitHub's "Rebase and merge" and "Squash and merge" both replay the work as a
+# NEW commit. The branch tip is then not an ancestor of the base, so an
+# ancestry-only test keeps every merged worktree forever. Reproduced here by
+# cherry-picking, which is what a rebase merge does server-side.
+cd "$LAB/shared" || exit 1
+git switch -q main; git fetch -q origin; git merge -q --ff-only origin/main   # case 9 pushed past us
+RB="$HOME/.claude-worktrees/$(key "$LAB/shared")/aaaaaaaa"
+git worktree add -q -b jbarbier/rebased-aaaaaaaa "$RB" origin/main
+printf 'landed via rebase\n' > "$RB/rebased.txt"
+git -C "$RB" add rebased.txt; git -C "$RB" commit -qm "work that gets rebase-merged"
+git -C "$RB" push -q -u origin HEAD
+RBSHA=$(git -C "$RB" rev-parse HEAD)
+git switch -q main
+# GitHub replays the commit under its own committer identity and timestamp, so the
+# SHA changes. Pin the committer date, or a same-second replay onto the same parent
+# hashes to the identical object and the test proves nothing.
+GIT_COMMITTER_DATE="2030-01-01T00:00:00 +0000" git cherry-pick "$RBSHA" >/dev/null
+git push -q origin main
+# and a branch with real work that has NOT landed: relaxing the test must not eat it
+LIVE="$HOME/.claude-worktrees/$(key "$LAB/shared")/bbbbbbbb"
+git worktree add -q -b jbarbier/live-bbbbbbbb "$LIVE" origin/main
+printf 'still in review\n' > "$LIVE/live.txt"
+git -C "$LIVE" add live.txt; git -C "$LIVE" commit -qm "work still open"
+git -C "$LIVE" push -q -u origin HEAD
+git fetch -q origin; git remote set-head origin -a >/dev/null 2>&1
+check "rebase merge rewrote the SHA" \
+  "$(git merge-base --is-ancestor jbarbier/rebased-aaaaaaaa origin/main && echo ancestor || echo not-ancestor)" \
+  "not-ancestor"
+bash -c "$SWEEP" >/dev/null 2>&1
+[ -d "$RB" ] && bad "kept a rebase-merged worktree: ancestry-only test, disk fills up forever" \
+             || ok "removed the rebase-merged worktree"
+[ -d "$LIVE" ] && ok "kept a pushed branch whose work has not landed" \
+               || bad "DELETED unlanded work: the relaxed test is too loose"
+
+echo "== 12. documented gap: a multi-commit squash merge is still kept =="
+# git cherry compares patch ids. A squash collapses N commits into one patch
+# that equals none of them, so each part still reads as unlanded. The sweep
+# keeps that worktree, which is the safe direction and is why CLAUDE.md says so
+# out loud instead of pretending the case is covered.
+git switch -q main; git fetch -q origin; git merge -q --ff-only origin/main
+SQ="$HOME/.claude-worktrees/$(key "$LAB/shared")/cccccccc"
+git worktree add -q -b jbarbier/squashed-cccccccc "$SQ" origin/main
+printf 'one\n' > "$SQ/sq.txt"; git -C "$SQ" add sq.txt; git -C "$SQ" commit -qm "part one"
+printf 'two\n' >> "$SQ/sq.txt"; git -C "$SQ" add sq.txt; git -C "$SQ" commit -qm "part two"
+git -C "$SQ" push -q -u origin HEAD
+git switch -q main
+git merge -q --squash jbarbier/squashed-cccccccc >/dev/null && git commit -qm "squashed"   # server-side squash merge
+git push -q origin main
+git fetch -q origin; git remote set-head origin -a >/dev/null 2>&1
+bash -c "$SWEEP" >/dev/null 2>&1
+[ -d "$SQ" ] && ok "kept the multi-commit squash, exactly as documented" \
+             || bad "removed it: the doc's stated gap no longer matches the snippet"
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
