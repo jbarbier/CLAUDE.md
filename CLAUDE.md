@@ -93,7 +93,7 @@ Then move the session into it: call `EnterWorktree` with `path` set to the `WORK
 
 ```bash
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-[ -f "$ROOT/.env" ] && cp "$ROOT/.env" .        # small, per-worktree, never committed
+[ -f "$ROOT/.env" ] && cp "$ROOT/.env" .        # the copy is per-worktree; the VALUES inside are not
 [ -d "$ROOT/node_modules" ] && ln -s "$ROOT/node_modules" node_modules   # big, shared, not copied
 git submodule update --init --recursive 2>/dev/null   # worktrees do not inherit submodules
 # then the project's own install/build step, e.g. npm ci / uv sync / bundle install
@@ -101,6 +101,7 @@ git submodule update --init --recursive 2>/dev/null   # worktrees do not inherit
 
 Adjust the list to the project. Never commit those files to fix this.
 
+- **A worktree isolates files in the repo, and nothing else.** The copied `.env` points both sessions at one database, one dev port, one redis, one bucket prefix, one compose project. Two sessions then run migrations against the same schema, and each one sees the other's failures as a bug in its own change. Before the first run, fork every shared handle per session: suffix the database name with `${CLAUDE_CODE_SESSION_ID:0:8}`, offset the port, prefix the compose project, and drop the fork at the end of the task the same way you drop the worktree. This is not a snippet on purpose. The names belong to the project, not to git, and a generic rewrite of `DATABASE_URL` would be wrong more often than right.
 - **The branch prefix comes from the GitHub login, not the email.** They are often different: a `user.email` local-part can be an old handle teammates have never seen. It is cached per repo, not globally, because a work account and a personal account resolve to different handles on the same machine. Override with `git config claude.branchPrefix`. Never cache an empty value: `git config` returns success on an empty string, so one bad write would poison the repo until someone unset it by hand.
 - **Base off the remote default branch, never local HEAD.** A session that branches off whatever the shared checkout is sitting on inherits another session's half-finished work. Do not hardcode `origin/main`: plenty of repos are `master`, and `origin/HEAD` is unset on any repo built with `git init` plus `git remote add`.
 - **Shell variables do not survive between tool calls.** `SID`, `WT`, `OWNER` and `BASE` are gone by the next command, so every snippet here re-derives what it needs. Re-derive, don't remember.
