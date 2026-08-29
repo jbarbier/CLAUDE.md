@@ -46,13 +46,11 @@ This block is mandatory and verbose on purpose. Julien reads it to see what mode
 
 Two facts hold at once: Julien works with other people, so nothing lands on `main` directly; and several Claude Code sessions run on the same machine, in the same repo, at the same time.
 
-**Creating a branch does not isolate a session.** Every session started in the same directory shares one working tree. The moment session B runs `git switch -c`, session A's files change on disk underneath it, mid-edit. Session A then commits B's tree, or fails a test for reasons that live in another conversation. The branch name is not what collides, the working tree is, so the fix belongs at the working tree.
+**A branch does not isolate a session, the working tree does.** Every session started in the same directory shares one checkout. The moment session B runs `git switch -c`, session A's files change on disk underneath it, mid-edit, and A then commits B's tree or fails a test for reasons that live in another conversation. So: **the worktree is the session, the branch is the task.** Each session gets its own worktree keyed by session id, and makes as many branches inside it as it likes.
 
-**The rule: the worktree is the session. The branch is the task.** Each session gets its own git worktree, keyed by its session id, and makes as many task branches inside it as it likes. Git helps a little (it refuses to check out one branch in two worktrees) but it will not stop you editing the shared checkout. That part is on the guard below, so run it.
+Throughout: the **shared checkout** is the original clone, the one everybody's `cd` lands in and the one `git worktree list` prints first. Nobody works there.
 
-Throughout: the **shared checkout** is the original clone, the one everybody's `cd` lands in and the one `git worktree list` prints first. Nobody edits there.
-
-**Setup — once per session, before the first write.** Run it from the shared checkout. `SLUG` is the only blank to fill: lowercase, dash separated, three words at most (`fix-login`, `stripe-webhook-retry`).
+**Setup — once per session, before the first write.** Run it from the shared checkout, as one unit. `SLUG` is the only blank: lowercase, dash separated, three words at most.
 
 ```bash
 SLUG=fix-login                                                    # <- the task, kebab-case
@@ -62,14 +60,18 @@ ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 KEY=$(basename "$ROOT")-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)   # unique per repo PATH
 WT="$HOME/.claude-worktrees/$KEY/$SID"
 
+# GitHub login, not the email local-part (often a stale handle). Cached per repo,
+# never empty: git config succeeds on "" and would poison the repo until unset.
 OWNER=$(git config claude.branchPrefix)
 [ -n "$OWNER" ] || OWNER=$(gh api user --jq .login 2>/dev/null)
 [ -n "$OWNER" ] || OWNER=$(git config user.email | cut -d@ -f1)
 [ -n "$OWNER" ] || { echo "STOP: git config claude.branchPrefix YOUR_HANDLE"; exit 1; }
-git config claude.branchPrefix "$OWNER"          # repo-local: work and personal handles differ
+git config claude.branchPrefix "$OWNER"
 
+# Remote default branch, never local HEAD (that inherits another session's work).
+# The ladder is because plenty of repos are master and origin/HEAD is often unset.
 git fetch -q origin 2>/dev/null
-git remote set-head -a origin >/dev/null 2>&1                     # repair origin/HEAD if unset
+git remote set-head -a origin >/dev/null 2>&1
 BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
 for c in origin/main origin/master main master; do
   [ -n "$BASE" ] && break
@@ -85,11 +87,9 @@ fi
 echo "WORKTREE $WT"
 ```
 
-Run that block as a unit; each Claude Code Bash call is already its own shell, so the `exit 1` lines are failure stops, not something that ends your session. Pasting it into your own terminal by hand is the one case where that matters: use `bash -c` there.
+Then call `EnterWorktree` with `path` set to the `WORKTREE` path it printed (this section is the instruction that authorizes that tool); outside Claude Code, `cd` there. It prints the path because shell variables die between tool calls, which is why every snippet re-derives what it needs. Resuming re-attaches rather than duplicating, but creates no branch: resuming into a new task means running the second-task block.
 
-Then move the session into it: call `EnterWorktree` with `path` set to the `WORKTREE` path the block just printed (this section is the project instruction that authorizes that tool). Outside Claude Code, `cd` to it. The block prints the path on purpose, because `$WT` is gone by the next tool call.
-
-**Then bootstrap the worktree, before the first test run.** A worktree contains tracked files only. `.env`, `node_modules/`, virtualenvs and build caches are gitignored, so they are absent, and the first command you run fails for a reason that has nothing to do with your change. Bring over what the project needs and run its install step once, when the worktree is created. Symlink the big directories, copy the small secrets:
+**Then bootstrap, before the first test run.** A worktree has tracked files only, so `.env`, `node_modules/` and virtualenvs are absent and your first command fails for reasons unrelated to your change.
 
 ```bash
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
@@ -99,50 +99,44 @@ git submodule update --init --recursive 2>/dev/null   # worktrees do not inherit
 # then the project's own install/build step, e.g. npm ci / uv sync / bundle install
 ```
 
-Adjust the list to the project. Never commit those files to fix this.
+Adjust to the project, never commit these files to fix this. **The worktree isolates files in the repo and nothing else:** that copied `.env` points both sessions at one database and one port, so two sessions migrate the same schema and each reads the other's failure as its own bug. Before the first run, fork the single-writer handles (db name, port, container names) with `${CLAUDE_CODE_SESSION_ID:0:8}`. Prose, not a snippet: the names belong to the project, not to git.
 
-- **A worktree isolates files in the repo, and nothing else.** The copied `.env` points both sessions at one database, one dev port, one redis, one bucket prefix, one compose project. Two sessions then run migrations against the same schema, and each one sees the other's failures as a bug in its own change. Before the first run, fork every shared handle per session: suffix the database name with `${CLAUDE_CODE_SESSION_ID:0:8}`, offset the port, prefix the compose project, and drop the fork at the end of the task the same way you drop the worktree. This is not a snippet on purpose. The names belong to the project, not to git, and a generic rewrite of `DATABASE_URL` would be wrong more often than right.
-- **The branch prefix comes from the GitHub login, not the email.** They are often different: a `user.email` local-part can be an old handle teammates have never seen. It is cached per repo, not globally, because a work account and a personal account resolve to different handles on the same machine. Override with `git config claude.branchPrefix`. Never cache an empty value: `git config` returns success on an empty string, so one bad write would poison the repo until someone unset it by hand.
-- **Base off the remote default branch, never local HEAD.** A session that branches off whatever the shared checkout is sitting on inherits another session's half-finished work. Do not hardcode `origin/main`: plenty of repos are `master`, and `origin/HEAD` is unset on any repo built with `git init` plus `git remote add`.
-- **Shell variables do not survive between tool calls.** `SID`, `WT`, `OWNER` and `BASE` are gone by the next command, so every snippet here re-derives what it needs. Re-derive, don't remember.
-- **Second task, same session: new branch, same worktree, clean tree first.** `git switch -c` carries uncommitted work onto the new branch, which quietly contaminates the next task with the last one. Resolve the base the same way setup does, because an unset `origin/HEAD` would otherwise put task two on task one's branch and into task one's PR:
-
-  ```bash
-  SLUG=next-task                                                  # <- the new task
-  git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
-  git fetch -q origin 2>/dev/null
-  git remote set-head -a origin >/dev/null 2>&1
-  BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
-  for c in origin/main origin/master main master; do
-    [ -n "$BASE" ] && break
-    git rev-parse -q --verify "$c" >/dev/null && BASE=$c
-  done
-  [ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
-  git switch -c "$(git config claude.branchPrefix)/$SLUG-${CLAUDE_CODE_SESSION_ID:0:8}" "$BASE" || exit 1
-  ```
-
-  Never a second worktree.
-- **Resuming re-attaches, it does not duplicate.** The path is derived from the session id, so re-running the setup block finds the existing worktree and enters it. Note what it does *not* do: it does not create the new branch. If you are resuming into a different task, run the second-task block after it.
-
-**The guard — run it before the first write of every task, and after any compaction.** One question only: am I about to write in the shared checkout?
+**Second task, same session: new branch, same worktree, clean tree first.** Never a second worktree.
 
 ```bash
+SLUG=next-task                                                  # <- the new task
+# switch -c carries uncommitted work into task two. Base resolved as setup does:
+# an unset origin/HEAD would put task two on task one's branch, and its PR.
+git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
+git fetch -q origin 2>/dev/null
+git remote set-head -a origin >/dev/null 2>&1
+BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
+for c in origin/main origin/master main master; do
+  [ -n "$BASE" ] && break
+  git rev-parse -q --verify "$c" >/dev/null && BASE=$c
+done
+[ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
+git switch -c "$(git config claude.branchPrefix)/$SLUG-${CLAUDE_CODE_SESSION_ID:0:8}" "$BASE" || exit 1
+```
+
+**The guard — before the first write of every task, and after any compaction.** One question: am I about to write in the shared checkout?
+
+```bash
+# Both sides resolve symlinks (rev-parse does, a raw $HOME does not) or it cries
+# wolf forever on a symlinked home. Any linked worktree passes, so a sub-agent in
+# a harness-provided tree is not sent back into the parent's.
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 [ "$(git rev-parse --show-toplevel)" = "$(cd "$ROOT" && pwd -P)" ] \
   && echo "WRONG TREE — you are in the shared checkout, set up a worktree"
 ```
 
-Both sides resolve symlinks, because `git rev-parse --show-toplevel` does and a raw `$HOME` does not; comparing them unresolved reports WRONG TREE forever on any machine whose home is a symlink, and a guard that cries wolf teaches you to ignore the one check that matters. The guard deliberately accepts *any* linked worktree rather than only the one this block would build, so that a sub-agent placed in a harness-provided worktree passes instead of being sent back into the parent's tree.
+If it trips, stop. Do not edit, commit, or "just switch the branch quickly". If you already changed files there, don't discard them and don't commit them: `git stash -u`, run setup, `git stash pop` inside the worktree.
 
-If it trips, stop. Do not edit, do not commit, do not "just switch the branch quickly". Set the worktree up and start again. If you already changed files in the shared checkout before noticing, do not throw them away and do not commit them there: `git stash -u` in the shared checkout, run the setup, then `git stash pop` inside the new worktree.
+**Sub-agents share the parent's worktree**, since they inherit its session id. Fine for readers and for units that run in sequence. Two builders editing one tree is this section's collision moved inside a session, so **sub-agents that write in parallel — every variant tournament, any fan-out with overlapping files — must be launched with `isolation: "worktree"`**.
 
-**Sub-agents share the parent's worktree, so parallel builders must not.** Sub-agents inherit the parent's `CLAUDE_CODE_SESSION_ID` verbatim and resolve to the parent's worktree. For a sub-agent that only reads, or for units that run one after another, that is correct and cheap. But two builders editing the same files in one working tree is the collision this whole section exists to prevent, just moved inside a single session. So: **any sub-agents that write in parallel — every variant tournament in "Fan-out + harsh critic", and any fan-out whose units touch overlapping files — must be launched with `isolation: "worktree"`**, which makes the harness give each one its own tree.
+**Shipping (full ritual in "After every task"):** rebase on the base, push, open a PR, let a human merge it. Never push to `main`, never merge your own PR unless Julien says so. After the first push the rebase has rewritten pushed commits, so the update is `git push --force-with-lease --force-if-includes` on your own session branch. Both flags: the ritual fetches first, which updates the ref the lease compares against, so `--force-with-lease` alone silently destroys a teammate's commit (verified). `--force-if-includes` is the one that refuses. Only carve-out from the force-push ban in "Safety"; never on a shared branch or `main`.
 
-**Shipping the branch (the full ritual is in "After every task"):** rebase on the base branch, push, open a PR, let a human merge it. Never push to `main`, and never merge your own PR unless Julien says so.
-
-**After the first push, rebase means `--force-with-lease --force-if-includes`.** Rebasing rewrites commits you already pushed, so the next plain push is rejected as non-fast-forward. `--force-with-lease` alone is not the safety net it looks like here: the documented ritual fetches first, and that fetch updates the remote-tracking ref the lease is compared against, so a teammate's commit pushed to your branch is silently destroyed (verified). `--force-if-includes` is the part that actually refuses, because it checks that the commit you are overwriting is one your local branch has integrated. Use both, on your own session branch only. That pair is the one carve-out from the force-push ban in "Safety"; it does not extend to shared branches, and never to `main`.
-
-**Cleanup is a manual command, never part of setup.** Worktrees are not free (each is a full checkout), but a sweep that runs automatically will eventually run while somebody else is mid-task, so it runs when Julien asks, from the shared checkout:
+**Cleanup is a manual command, never part of setup.** A sweep that runs automatically eventually runs while somebody is mid-task, so it runs when Julien asks, from the shared checkout. Each `continue` is a bug that bit:
 
 ```bash
 HERE=$(git rev-parse --show-toplevel)
@@ -151,30 +145,31 @@ git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' |
   grep "/\.claude-worktrees/" | while read -r w; do
     [ "$w" = "$HERE" ] && continue                       # never the tree you are standing in
     b=$(git -C "$w" branch --show-current); [ -n "$b" ] || continue
+    # Not merely "has an upstream": worktree add sets it immediately, so the weak
+    # test passes for a session that has done nothing and the sweep eats live work.
     up=$(git -C "$w" rev-parse --abbrev-ref "@{upstream}" 2>/dev/null)
     [ "$up" = "origin/$b" ] || continue                  # never pushed under its own name
+    # "Landed" is not "is an ancestor": rebase and squash merges replay the work as
+    # a new commit, so ancestry alone keeps every merged worktree forever. cherry
+    # compares patch ids and still prints + for unlanded work. Gap: a multi-commit
+    # squash matches no single patch and is kept. Remove those by hand.
     git merge-base --is-ancestor "$b" "$BASE" \
       || [ -z "$(git cherry "$BASE" "$b" | grep '^+')" ] || continue     # not landed yet
+    # worktree remove refuses on modified/untracked files but deletes IGNORED ones
+    # without complaint, and ignored is exactly where bootstrap put .env.
     [ -n "$(git -C "$w" status --porcelain --ignored)" ] && continue     # something left behind
     git worktree remove "$w"
   done
 git worktree prune
 ```
 
-The four `continue` lines are the whole point, and each one is a bug that bit:
+Removing a worktree never deletes its branch. `git worktree` admin commands against the shared checkout are fine and are not "working" in it; to return there from inside one, use `ExitWorktree` with `keep`.
 
-- **Never the cwd**, or running the sweep from inside your own worktree deletes the directory you are standing in.
-- **Never a branch that was not pushed under its own name.** "Is it merged" is not a safe test on its own: a brand-new branch is an ancestor of the base, so a naive sweep deletes every session that has not committed yet, including other people's live work. Note the check is `upstream = origin/<branch>`, not merely "has an upstream": `git worktree add -b X ... origin/main` sets X's upstream to `origin/main` straight away, so the weaker test passes for a worktree that has done nothing at all.
-- **Landed on the base**, which is not the same test as "is an ancestor of it". GitHub's "Rebase and merge" and "Squash and merge" replay your work as a new commit under their own committer identity, so the branch tip you still have locally is not an ancestor of anything. Ancestry alone therefore keeps every rebase-merged worktree forever, silently, in the safe direction, until the disk fills (verified: PR #6 merged, sweep printed `not merged into origin/main`, worktree stayed). `git cherry` compares patch ids instead of SHAs, so it sees the work upstream and the `^+` lines are what genuinely has not landed. Relaxing the test this way cannot eat live work: a branch with unpushed or unlanded commits still prints `+`. **Known gap:** a squash of a *multi-commit* branch collapses N patches into one that matches none of them, so each part still reads as unlanded and that worktree is kept. Closing that needs `gh pr view --json state`, which is a GitHub dependency in a block that is otherwise pure git, so we take the disk cost and remove those by hand.
-- **`--ignored` clean.** `git worktree remove` refuses on modified and untracked files but deletes **ignored** ones without complaint (verified: `rc=0`, directory gone), and ignored is exactly where the bootstrap step puts `.env`. Git will not protect that file, so we do.
-
-Removing a worktree never deletes its branch.
-
-Running `git worktree` admin commands against the shared checkout is fine and is not "working" in it. To return there from inside a worktree, use `ExitWorktree` with `keep`.
+Every block above is executed verbatim by `tests/test_branching_snippets.sh` in this repo, one case per bug that bit. Change a line, run it. That suite is why the reasons can stay this short.
 
 **Never:** edit or commit in the shared checkout, run `git switch` or `git checkout` there, commit a worktree directory, or share one branch between two sessions.
 
-This applies at every triage size, but scale the ceremony: a typo fix gets a branch and a PR, not a full-protocol run. The branch is cheap; the protocol is what "Task sizing" rations.
+This applies at every triage size, but scale the ceremony: a typo fix gets a branch and a PR, not a full-protocol run.
 
 ## The two machine spaces — read this before doing anything
 
