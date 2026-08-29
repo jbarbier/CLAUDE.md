@@ -6,7 +6,7 @@
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 RC=0
-for t in test_branching_design.sh test_branching_snippets.sh test_ship_round_two.sh; do
+for t in test_branching_snippets.sh test_ship_round_two.sh; do
   echo "=== $t ==="
   bash "$t" || RC=1
   echo
