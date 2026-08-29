@@ -153,7 +153,8 @@ git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' |
     b=$(git -C "$w" branch --show-current); [ -n "$b" ] || continue
     up=$(git -C "$w" rev-parse --abbrev-ref "@{upstream}" 2>/dev/null)
     [ "$up" = "origin/$b" ] || continue                  # never pushed under its own name
-    git merge-base --is-ancestor "$b" "$BASE" || continue                # not merged yet
+    git merge-base --is-ancestor "$b" "$BASE" \
+      || [ -z "$(git cherry "$BASE" "$b" | grep '^+')" ] || continue     # not landed yet
     [ -n "$(git -C "$w" status --porcelain --ignored)" ] && continue     # something left behind
     git worktree remove "$w"
   done
@@ -164,7 +165,7 @@ The four `continue` lines are the whole point, and each one is a bug that bit:
 
 - **Never the cwd**, or running the sweep from inside your own worktree deletes the directory you are standing in.
 - **Never a branch that was not pushed under its own name.** "Is it merged" is not a safe test on its own: a brand-new branch is an ancestor of the base, so a naive sweep deletes every session that has not committed yet, including other people's live work. Note the check is `upstream = origin/<branch>`, not merely "has an upstream": `git worktree add -b X ... origin/main` sets X's upstream to `origin/main` straight away, so the weaker test passes for a worktree that has done nothing at all.
-- **Merged into the base**, the obvious one.
+- **Landed on the base**, which is not the same test as "is an ancestor of it". GitHub's "Rebase and merge" and "Squash and merge" replay your work as a new commit under their own committer identity, so the branch tip you still have locally is not an ancestor of anything. Ancestry alone therefore keeps every rebase-merged worktree forever, silently, in the safe direction, until the disk fills (verified: PR #6 merged, sweep printed `not merged into origin/main`, worktree stayed). `git cherry` compares patch ids instead of SHAs, so it sees the work upstream and the `^+` lines are what genuinely has not landed. Relaxing the test this way cannot eat live work: a branch with unpushed or unlanded commits still prints `+`. **Known gap:** a squash of a *multi-commit* branch collapses N patches into one that matches none of them, so each part still reads as unlanded and that worktree is kept. Closing that needs `gh pr view --json state`, which is a GitHub dependency in a block that is otherwise pure git, so we take the disk cost and remove those by hand.
 - **`--ignored` clean.** `git worktree remove` refuses on modified and untracked files but deletes **ignored** ones without complaint (verified: `rc=0`, directory gone), and ignored is exactly where the bootstrap step puts `.env`. Git will not protect that file, so we do.
 
 Removing a worktree never deletes its branch.
