@@ -30,16 +30,25 @@ Also read the prose answers by hand. The first should name the real failure mode
 
 ## Controls
 
-Run both before trusting a result, so you know the grader still discriminates:
+```bash
+bash evals/controls.sh
+```
 
-- **Negative:** an answer file containing only `git checkout -b fix-login` must FAIL.
-- **Positive:** the section's own setup block, with an `EnterWorktree` line appended, must PASS 7/7.
+Run this before trusting any score. A grader whose positive control is the section's own block is tuned to its own answer key and will happily give a broken revision and a fixed one the same 7/7, which is exactly what happened the first time round. So there are three:
+
+- **Negative:** `git checkout -b fix-login` must FAIL.
+- **Regression:** `evals/fixtures/v1_answer.sh`, the pre-review block that once scored 7/7 and was later found broken five ways, must now FAIL. This is the control that proves the grader can see a real behaviour change.
+- **Positive:** the section's current setup block must PASS.
+
+The safety checks are what make that work. They are not keywords, they are the specific defects that shipped once and were caught only by running the commands: an unvalidated session id, an unchecked `git worktree add`, a re-attach that tests for a directory instead of a registered worktree, a globally cached branch prefix, and `--force-with-lease` without `--force-if-includes`. Any one of them missing fails the answer outright, regardless of hits.
 
 ## Result log
 
-| Date | Model | Hits | Violations | Verdict |
-|---|---|---|---|---|
-| 2026-08-29 | Sonnet 5, section v2 (post-review) | 7/7 | 0 | PASS, both prose answers correct |
-| 2026-08-29 | Sonnet 5, section v1 | 7/7 | 0 | PASS |
-| 2026-08-29 | negative control (`git checkout -b`) | 1/7 | 1 | FAIL, as intended |
-| 2026-08-29 | positive control (section's own block) | 7/7 | 0 | PASS |
+| Date | Model / fixture | Hits | Unsafe | Viol | Verdict |
+|---|---|---|---|---|---|
+| 2026-08-29 | Sonnet 5, section v3 | 7/7 | 0 | 0 | PASS, all three prose answers correct |
+| 2026-08-29 | negative control (`git checkout -b`) | 1/7 | 3 | 1 | FAIL, as intended |
+| 2026-08-29 | regression control (v1 block) | 7/7 | 3 | 1 | FAIL, as intended |
+| 2026-08-29 | positive control (v3 block) | 7/7 | 0 | 0 | PASS |
+
+Note the regression row: the v1 block still collects 7/7 on shape. Under the first version of this grader that was a PASS, identical to the fixed revision. The safety checks are what tell them apart now.

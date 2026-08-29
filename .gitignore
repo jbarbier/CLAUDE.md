@@ -1,4 +1,5 @@
-# EnterWorktree's default location when it creates a worktree inside the repo.
+# If a worktree ever lands inside the repo (EnterWorktree can be told to create
+# one here), it must not show up as untracked files in everyone's git status.
 # Narrow on purpose: .claude/settings.json, .claude/agents/ and .claude/skills/
 # are meant to be committed and shared with the team.
 .claude/worktrees/

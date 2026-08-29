@@ -65,9 +65,15 @@ Most of `CLAUDE.md` is judgement you cannot unit-test. The branching section is 
 bash tests/run.sh
 ```
 
-The suite creates its own git repos under `$TMPDIR` with an overridden `$HOME`, so it never touches your repos or your `~/.gitconfig`. It checks the things that actually bite: that two sessions cannot stomp each other, that re-running setup re-attaches instead of erroring, that a snippet never reads a shell variable a previous tool call set, and that the base branch is the remote default rather than whatever the shared checkout was sitting on. If you edit those commands, run it again.
+The suite creates its own git repos under `$TMPDIR` with an overridden `$HOME` and `GIT_CONFIG_GLOBAL`, so it never touches your repos or your real git config. Every case in it is a defect that actually shipped and was caught by running the commands, not by reading them: a sweep that deleted other sessions' live worktrees, a `git worktree remove` that silently ate a gitignored `.env`, an unset session id that put two sessions in one tree while reporting success, a `git worktree add` whose failure was swallowed by the next `echo`, and `--force-with-lease` being defeated by the `git fetch` that runs right before it. If you edit those commands, run it again.
 
-Those tests prove the commands work. They cannot prove the section is followable, which is the other half of a rules file. That is what [`evals/branching_scenario.md`](./evals/branching_scenario.md) is for: hand a fresh model the branching section alone and see whether it produces the right commands cold, graded by `evals/grade_branching.sh`. Re-run it when you change the section or change model generation, and keep the negative control — an answer of `git checkout -b my-fix` has to FAIL, because that is the exact mistake the section exists to prevent.
+Those tests prove the commands work. They cannot prove the section is followable, which is the other half of a rules file. That is what [`evals/branching_scenario.md`](./evals/branching_scenario.md) is for: hand a fresh model the branching section alone and see whether it produces the right commands cold.
+
+```bash
+bash evals/controls.sh    # prove the grader still discriminates, before trusting a score
+```
+
+The controls matter more than the score. An earlier version of this grader gave a broken revision and its fixed replacement the same 7/7, because its positive control was the section's own block, so it was grading against its own answer key. There is now a regression fixture, `evals/fixtures/v1_answer.sh`, holding the broken version: it has to FAIL, or the eval is not measuring anything.
 
 ## Make it yours (replace my name)
 

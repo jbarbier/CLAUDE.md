@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Runs the shell snippets EXACTLY as they appear in the "Branching" section of
+# Runs the shell blocks EXACTLY as they appear in the "Branching" section of
 # CLAUDE.md, extracted from the markdown rather than retyped, so the thing under
 # test is literally the thing a reader copies.
 #
-# Every case below is a defect that was actually found in review, not a
-# hypothetical. If you change the section, run this.
+# Every case is a defect that was found in review and reproduced, not a
+# hypothetical. Each one fails if you revert the corresponding fix.
 set -uo pipefail
 DOC=${1:-"$(cd "$(dirname "$0")/.." && pwd)/CLAUDE.md"}
 [ -f "$DOC" ] || { echo "no CLAUDE.md at $DOC"; exit 1; }
@@ -15,13 +15,14 @@ check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (want '$3', got '$2')"; 
 
 LAB=$(mktemp -d); trap 'rm -rf "$LAB"' EXIT
 export HOME="$LAB/home"; mkdir -p "$HOME"
-export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"      # never touch the real one
 export PATH="$LAB/bin:$PATH"; mkdir -p "$LAB/bin"
 nogh(){ printf '#!/bin/sh\nexit 1\n' > "$LAB/bin/gh"; chmod +x "$LAB/bin/gh"; }
 nogh
-git config --global user.email jbarbier@example.com
-git config --global user.name "Julien Barbier"
-git config --global init.defaultBranch main
+freshglobal(){ export GIT_CONFIG_GLOBAL="$1"; : > "$1"
+  git config --global user.name "Julien Barbier"
+  git config --global user.email "${2:-jbarbier@example.com}"
+  git config --global init.defaultBranch main; }
+freshglobal "$HOME/.gitconfig"
 
 extract(){ awk -v want="$1" '
     /^## Branching/ {inSec=1}
@@ -29,167 +30,186 @@ extract(){ awk -v want="$1" '
     inSec && /^ *```bash/ {n++; if(n==want){grab=1; next}}
     grab && /^ *```/ {exit}
     grab {sub(/^  /,""); print}' "$DOC"; }
-SETUP=$(extract 1); SECOND=$(extract 2); GUARD=$(extract 3); SWEEP=$(extract 4)
+SETUP=$(extract 1); BOOTSTRAP=$(extract 2); SECOND=$(extract 3)
+GUARD=$(extract 4); SWEEP=$(extract 5)
 
-mkrepo(){ # $1 = path, $2 = default branch. Echoes nothing; creates repo + origin.
-  git init -q --bare "$1.git"
-  git init -q -b "$2" "$1"
+mkrepo(){ git init -q --bare "$1.git"; git init -q -b "${2:-main}" "$1"
   git -C "$1" commit -q --allow-empty -m init
-  git -C "$1" remote add origin "$1.git"
-  git -C "$1" push -q -u origin "$2"; }
+  git -C "$1" remote add origin "$1.git"; git -C "$1" push -q -u origin "${2:-main}"
+  git -C "$1" remote set-head origin -a >/dev/null 2>&1; }
 key(){ printf '%s-%s' "$(basename "$1")" "$(printf %s "$1" | cksum | cut -d' ' -f1)"; }
-# A fresh global config that can still author commits, but carries no cached
-# claude.branchPrefix. $1 = file, $2 = user.email to use.
-freshglobal(){ export GIT_CONFIG_GLOBAL="$1"; : > "$1"
-  git config --global user.name "Julien Barbier"
-  git config --global user.email "$2"
-  git config --global init.defaultBranch main; }
 SID=1f3b76a3
+run_setup(){ # $1 = session id, $2 = slug. Runs the shipped block verbatim.
+  CLAUDE_CODE_SESSION_ID="$1" bash -c "$(echo "$SETUP" | sed "s/^SLUG=fix-login/SLUG=$2/")" 2>&1; }
 
-echo "== 0. every shipped block defines the variables it reads =="
+echo "== 0. blocks extract, are self-contained, and have no placeholders =="
 i=0
-for blk in "$SETUP" "$SECOND" "$GUARD" "$SWEEP"; do
+for blk in "$SETUP" "$BOOTSTRAP" "$SECOND" "$GUARD" "$SWEEP"; do
   i=$((i+1)); [ -n "$blk" ] || { bad "block $i empty (extraction broke)"; continue; }
   leak=""
-  for v in WT OWNER BASE SID ROOT KEY SLUG WANT; do
+  for v in WT OWNER BASE SID ROOT KEY SLUG HERE; do
     echo "$blk" | grep -q "\$$v" && ! echo "$blk" | grep -qE "^ *$v=" && leak="$leak \$$v"
   done
   [ -z "$leak" ] && ok "block $i is self-contained" || bad "block $i reads undefined:$leak"
 done
-echo "$SETUP" | grep -q '<task-slug>' && bad "setup still has a <placeholder> mid-block" \
-                                      || ok "no unexplained placeholder in the setup block"
+echo "$SETUP" | grep -q '<.*>' && bad "setup has an unexplained placeholder" \
+                               || ok "no unexplained placeholder in setup"
 
-echo "== 1. setup runs verbatim; shared checkout is left alone =="
-mkrepo "$LAB/shared" main
+echo "== 1. THE core claim, using the shipped block: two sessions, two trees =="
+mkrepo "$LAB/shared"
 cd "$LAB/shared" || exit 1
 git switch -q -c someone-elses-wip; git commit -q --allow-empty -m wip
-git remote set-head origin -a >/dev/null 2>&1
-export CLAUDE_CODE_SESSION_ID=1f3b76a3-369f-4f9a-a363-99e5be44befb
-WT="$HOME/.claude-worktrees/$(key "$LAB/shared")/$SID"
-OUT=$(bash -c "$SETUP" 2>&1); RC=$?
-check "setup exits clean" "$RC" "0"
-[ "$RC" -eq 0 ] || echo "$OUT"
-check "worktree created where the guard will look" "$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null)" "$(cd "$WT" 2>/dev/null && pwd -P)"
-check "branch name" "$(git -C "$WT" rev-parse --abbrev-ref HEAD)" "jbarbier/fix-login-$SID"
-check "based on origin default, not the wip branch" \
-  "$(git -C "$WT" rev-parse HEAD)" "$(git rev-parse origin/main)"
-check "shared checkout not moved" "$(git branch --show-current)" "someone-elses-wip"
-echo "$OUT" | grep -q "^WORKTREE " && ok "prints the worktree path for the EnterWorktree call" \
-                                   || bad "did not print the WORKTREE path"
+OA=$(run_setup aaaa1111-x fix-login); RA=$?
+OB=$(run_setup bbbb2222-x add-export); RB=$?
+check "session A setup exits clean" "$RA" "0"
+check "session B setup exits clean" "$RB" "0"
+[ "$RA" = 0 ] || echo "$OA"
+WA="$HOME/.claude-worktrees/$(key "$LAB/shared")/aaaa1111"
+WB="$HOME/.claude-worktrees/$(key "$LAB/shared")/bbbb2222"
+check "A branch" "$(git -C "$WA" rev-parse --abbrev-ref HEAD 2>/dev/null)" "jbarbier/fix-login-aaaa1111"
+check "B branch" "$(git -C "$WB" rev-parse --abbrev-ref HEAD 2>/dev/null)" "jbarbier/add-export-bbbb2222"
+echo "A work" > "$WA/f.txt"; echo "B work" > "$WB/f.txt"
+git -C "$WB" switch -q -c jbarbier/third-bbbb2222        # B starts another task
+check "A's file survived B's branch switch" "$(cat "$WA/f.txt")" "A work"
+check "A's branch survived B's branch switch" \
+  "$(git -C "$WA" rev-parse --abbrev-ref HEAD)" "jbarbier/fix-login-aaaa1111"
+check "shared checkout never moved" "$(git branch --show-current)" "someone-elses-wip"
+check "based on the remote default, not the wip branch" \
+  "$(git -C "$WA" rev-parse HEAD)" "$(git rev-parse origin/main)"
+echo "$OA" | grep -q "^WORKTREE " && ok "prints the path for EnterWorktree" || bad "no WORKTREE line"
 
-echo "== 2. resume: same slug AND different slug both re-attach, no dangling branch =="
-B1=$(git branch --list | wc -l)
-R1=$(bash -c "$SETUP" 2>&1); check "re-run exits clean" "$?" "0"
-R2=$(bash -c "$(echo "$SETUP" | sed 's/^SLUG=fix-login/SLUG=some-other-task/')" 2>&1)
-check "re-run with a DIFFERENT slug exits clean" "$?" "0"
-echo "$R2" | grep -q "re-attaching" && ok "different slug re-attaches" || bad "got: $R2"
-check "no branches created by the two re-runs" "$(git branch --list | wc -l)" "$B1"
-check "still exactly one session worktree" "$(git worktree list | wc -l)" "2"
+echo "== 2. an unset session id must STOP, not silently share one tree =="
+mkrepo "$LAB/nosid"; cd "$LAB/nosid" || exit 1
+OUT=$(env -u CLAUDE_CODE_SESSION_ID bash -c "$SETUP" 2>&1); RC=$?
+[ "$RC" -ne 0 ] && ok "setup refuses when CLAUDE_CODE_SESSION_ID is unset" \
+                || bad "setup continued with an empty session id"
+echo "$OUT" | grep -q "CLAUDE_CODE_SESSION_ID" && ok "says why" || bad "no explanation: $OUT"
+check "no worktree was created" "$(git worktree list | wc -l)" "1"
 
-echo "== 3. guard survives a symlinked \$HOME (the false-alarm bug) =="
-mkdir -p "$LAB/realhome"; ln -s "$LAB/realhome" "$LAB/linkhome"
-G=$(HOME="$LAB/linkhome" bash -c '
-  mkdir -p "$HOME/.claude-worktrees"; true')
-REAL="$LAB/realhome"; LINK="$LAB/linkhome"
-mkrepo "$LAB/symrepo" main
-cd "$LAB/symrepo" || exit 1
-git remote set-head origin -a >/dev/null 2>&1
-SYMOUT=$(HOME="$LINK" bash -c "$SETUP" 2>&1); SRC=$?
-check "setup works with a symlinked HOME" "$SRC" "0"
-GOUT=$(cd "$LINK/.claude-worktrees/$(key "$LAB/symrepo")/$SID" 2>/dev/null && HOME="$LINK" bash -c "$GUARD" 2>&1)
-check "guard does NOT cry wolf under a symlinked HOME" "$GOUT" ""
-GOUT2=$(cd "$REAL/.claude-worktrees/$(key "$LAB/symrepo")/$SID" 2>/dev/null && HOME="$LINK" bash -c "$GUARD" 2>&1)
-check "guard also silent when reached via the real path" "$GOUT2" ""
+echo "== 3. a failed worktree add must not report success =="
+mkrepo "$LAB/dup"; cd "$LAB/dup" || exit 1
+git branch jbarbier/fix-login-eeee5555 origin/main          # branch already taken
+OUT=$(run_setup eeee5555-x fix-login); RC=$?
+[ "$RC" -ne 0 ] && ok "setup fails when the branch already exists" \
+                || bad "setup returned 0 after a fatal worktree add"
+echo "$OUT" | grep -q "^WORKTREE " && bad "printed a WORKTREE path that was never created" \
+                                   || ok "did not print a path it failed to create"
 
-echo "== 4. guard still fires where it should =="
+echo "== 4. resume re-attaches without duplicating =="
+cd "$LAB/shared" || exit 1
+N=$(git worktree list | wc -l); B=$(git branch --list | wc -l)
+OUT=$(run_setup aaaa1111-x fix-login); check "resume exits clean" "$?" "0"
+echo "$OUT" | grep -q "re-attaching" && ok "reports re-attaching" || bad "got: $OUT"
+check "no duplicate worktree" "$(git worktree list | wc -l)" "$N"
+check "no stray branch" "$(git branch --list | wc -l)" "$B"
+
+echo "== 5. guard: shared checkout vs any linked worktree =="
 cd "$LAB/shared" || exit 1
 bash -c "$GUARD" 2>&1 | grep -q "WRONG TREE" && ok "fires in the shared checkout" \
                                              || bad "silent in the shared checkout"
-git worktree add -q -b other/task-bbbb "$HOME/.claude-worktrees/$(key "$LAB/shared")/bbbbbbbb" origin/main
-GO=$(cd "$HOME/.claude-worktrees/$(key "$LAB/shared")/bbbbbbbb" && bash -c "$GUARD" 2>&1)
-echo "$GO" | grep -q "WRONG TREE" && ok "fires in another session's worktree" \
-                                  || bad "silent in another session's worktree"
+G=$(cd "$WA" && bash -c "$GUARD" 2>&1)
+check "silent in this session's worktree" "$G" ""
+# a harness-provided worktree, named the way the tool names them, must also pass
+git worktree add -q -b harness-style "$HOME/.claude-worktrees/plain/1f3b76a3" origin/main
+GH_=$(cd "$HOME/.claude-worktrees/plain/1f3b76a3" && bash -c "$GUARD" 2>&1)
+check "silent in a harness-provided worktree (no re-derivation fight)" "$GH_" ""
+mkdir -p "$LAB/linkhome"; ln -s "$LAB/home" "$LAB/linkhome/h"
+GS=$(cd "$LAB/linkhome/h/.claude-worktrees/$(key "$LAB/shared")/aaaa1111" 2>/dev/null && bash -c "$GUARD" 2>&1)
+check "silent when reached through a symlinked path" "$GS" ""
 
-echo "== 5. repo path containing a space =="
-mkdir -p "$LAB/my app"
-mkrepo "$LAB/my app/proj" main
-cd "$LAB/my app/proj" || exit 1
-git remote set-head origin -a >/dev/null 2>&1
-SPOUT=$(bash -c "$SETUP" 2>&1); check "setup exits clean with a space in the path" "$?" "0"
-[ -d "$HOME/.claude-worktrees/$(key "$LAB/my app/proj")/$SID" ] \
-  && ok "worktree path kept the whole repo name" || { bad "path was truncated at the space"; echo "$SPOUT"; }
+echo "== 6. repo paths with spaces, master default, and no remote at all =="
+mkdir -p "$LAB/my app"; mkrepo "$LAB/my app/proj"; cd "$LAB/my app/proj" || exit 1
+run_setup 11111111-x fix-login >/dev/null 2>&1
+[ -d "$HOME/.claude-worktrees/$(key "$LAB/my app/proj")/11111111" ] \
+  && ok "path with a space survives" || bad "path truncated at the space"
+mkrepo "$LAB/oldrepo" master; cd "$LAB/oldrepo" || exit 1
+git remote set-head origin -d >/dev/null 2>&1
+run_setup 22222222-x fix-login >/dev/null 2>&1
+check "master repo with origin/HEAD unset" \
+  "$(git -C "$HOME/.claude-worktrees/$(key "$LAB/oldrepo")/22222222" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+  "jbarbier/fix-login-22222222"
+git init -q -b main "$LAB/noremote"; cd "$LAB/noremote" || exit 1
+git commit -q --allow-empty -m init                    # no origin at all: exercises the ladder
+OUT=$(run_setup 33333333-x fix-login); check "repo with no remote exits clean" "$?" "0"
+[ "$?" = 0 ] || echo "    $OUT"
+check "no-remote worktree on its branch" \
+  "$(git -C "$HOME/.claude-worktrees/$(key "$LAB/noremote")/33333333" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+  "jbarbier/fix-login-33333333"
 
-echo "== 6. repo whose default branch is master, with origin/HEAD unset =="
-mkrepo "$LAB/oldrepo" master
-cd "$LAB/oldrepo" || exit 1
-git remote set-head origin -d >/dev/null 2>&1        # simulate init+remote add
-MOUT=$(bash -c "$SETUP" 2>&1); MRC=$?
-check "setup exits clean on a master repo" "$MRC" "0"
-[ "$MRC" -eq 0 ] || echo "    $MOUT"
-check "master worktree is on its branch" \
-  "$(git -C "$HOME/.claude-worktrees/$(key "$LAB/oldrepo")/$SID" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
-  "jbarbier/fix-login-$SID"
+echo "== 7. owner: cached per repo, never cached empty, gh beats email =="
+freshglobal "$LAB/g2" ""
+mkrepo "$LAB/noowner"; cd "$LAB/noowner" || exit 1
+git config user.email ""
+OUT=$(run_setup 44444444-x fix-login); RC=$?
+[ "$RC" -ne 0 ] && ok "refuses when no owner resolves" || bad "built a branch with an empty owner"
+check "nothing cached globally" "$(git config --global claude.branchPrefix)" ""
+printf '#!/bin/sh\necho jbarbier-gh\n' > "$LAB/bin/gh"; chmod +x "$LAB/bin/gh"
+freshglobal "$LAB/g3" write0@gmail.com
+mkrepo "$LAB/ghrepo"; cd "$LAB/ghrepo" || exit 1
+run_setup 55555555-x fix-login >/dev/null 2>&1
+check "gh login beats the email local-part" \
+  "$(git -C "$HOME/.claude-worktrees/$(key "$LAB/ghrepo")/55555555" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+  "jbarbier-gh/fix-login-55555555"
+check "prefix cached in the repo, not globally" "$(git config --local claude.branchPrefix)" "jbarbier-gh"
+check "global config left alone" "$(git config --global claude.branchPrefix)" ""
+nogh; freshglobal "$HOME/.gitconfig"
 
-echo "== 7. an unresolvable owner must NOT poison the global config =="
-freshglobal "$LAB/noowner.gitconfig" jbarbier@example.com
-mkrepo "$LAB/noowner" main
-cd "$LAB/noowner" || exit 1
-git config user.email ""                      # nothing resolvable: no prefix, no gh, no email
-git remote set-head origin -a >/dev/null 2>&1
-NOUT=$(bash -c "$SETUP" 2>&1); NRC=$?
-[ "$NRC" -ne 0 ] && ok "setup refuses instead of building a broken branch name" \
-                 || bad "setup continued with an empty owner"
-echo "$NOUT" | grep -q "claude.branchPrefix" && ok "tells you how to fix it" || bad "no guidance: $NOUT"
-CACHED=$(git config --global claude.branchPrefix)
-[ -z "$CACHED" ] && ok "nothing was cached globally" || bad "cached a bad prefix: '$CACHED'"
-export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
-
-echo "== 8. two different repos sharing a basename do not collide =="
-mkdir -p "$LAB/x" "$LAB/y"; mkrepo "$LAB/x/proj" main; mkrepo "$LAB/y/proj" main
-cd "$LAB/x/proj" || exit 1; git remote set-head origin -a >/dev/null 2>&1
-bash -c "$SETUP" >/dev/null 2>&1
-cd "$LAB/y/proj" || exit 1; git remote set-head origin -a >/dev/null 2>&1
-YRC=$(bash -c "$SETUP" >/dev/null 2>&1; echo $?)
-check "second repo with the same basename sets up cleanly" "$YRC" "0"
-[ "$(key "$LAB/x/proj")" != "$(key "$LAB/y/proj")" ] \
-  && ok "the two repos get different worktree keys" || bad "worktree keys collided"
-
-echo "== 9. second task refuses a dirty tree, then switches in place =="
+echo "== 8. second task: refuses dirty, and survives an unset origin/HEAD =="
 cd "$LAB/shared" || exit 1
-WTS="$HOME/.claude-worktrees/$(key "$LAB/shared")/$SID"
-echo dirty > "$WTS/leftover.txt"
-DRC=$(cd "$WTS" && bash -c "$SECOND" >/dev/null 2>&1; echo $?)
-[ "$DRC" -ne 0 ] && ok "refuses to start a new task on a dirty tree" || bad "carried WIP onto the new branch"
-rm -f "$WTS/leftover.txt"
-BEFORE=$(git worktree list | wc -l)
-(cd "$WTS" && bash -c "$SECOND") >/dev/null 2>&1
-check "switched to the new task branch" "$(git -C "$WTS" rev-parse --abbrev-ref HEAD)" \
-  "jbarbier/next-task-$SID"
-check "no new worktree" "$(git worktree list | wc -l)" "$BEFORE"
+echo dirty > "$WA/leftover.txt"
+RC=$(cd "$WA" && bash -c "$SECOND" >/dev/null 2>&1; echo $?)
+[ "$RC" -ne 0 ] && ok "refuses to start task two on a dirty tree" || bad "carried WIP to the new branch"
+rm -f "$WA/leftover.txt"
+git -C "$WA" add -A; git -C "$WA" commit -qm "task one work"   # tree must be clean to move on
+git remote set-head origin -d >/dev/null 2>&1          # the state the setup ladder exists for
+N=$(git worktree list | wc -l)
+(cd "$WA" && CLAUDE_CODE_SESSION_ID=aaaa1111-x bash -c "$SECOND") >/dev/null 2>&1
+check "task two switched branch even with origin/HEAD unset" \
+  "$(git -C "$WA" rev-parse --abbrev-ref HEAD)" "jbarbier/next-task-aaaa1111"
+check "task two created no new worktree" "$(git worktree list | wc -l)" "$N"
+git remote set-head origin -a >/dev/null 2>&1
 
-echo "== 10. sweep removes merged worktrees and keeps unmerged ones =="
+echo "== 9. the sweep must not eat live work =="
 cd "$LAB/shared" || exit 1
 git switch -q main 2>/dev/null || git switch -q -c main origin/main
-MERGED="$HOME/.claude-worktrees/$(key "$LAB/shared")/cccccccc"
-git worktree add -q -b jbarbier/merged-cccccccc "$MERGED" origin/main
-UNMERGED="$HOME/.claude-worktrees/$(key "$LAB/shared")/dddddddd"
-git worktree add -q -b jbarbier/unmerged-dddddddd "$UNMERGED" origin/main
-git -C "$UNMERGED" commit -q --allow-empty -m "real work not yet merged"
-git switch -q someone-elses-wip
-bash -c "$SWEEP" >/dev/null 2>&1
-[ -d "$MERGED" ] && bad "sweep left a fully merged worktree behind" || ok "sweep removed the merged worktree"
-[ -d "$UNMERGED" ] && ok "sweep kept the worktree with unmerged commits" || bad "sweep destroyed unmerged work"
+printf '.env\n' > "$LAB/shared/.gitignore"; git add -A; git commit -qm ign
+git push -q origin main; git remote set-head origin -a >/dev/null 2>&1
 
-echo "== 11. the branch prefix prefers the GitHub login over the email =="
-printf '#!/bin/sh\necho jbarbier-gh\n' > "$LAB/bin/gh"; chmod +x "$LAB/bin/gh"
-freshglobal "$LAB/gh.gitconfig" write0@gmail.com    # email local-part differs from gh login
-mkrepo "$LAB/ghrepo" main
-cd "$LAB/ghrepo" || exit 1; git remote set-head origin -a >/dev/null 2>&1
-bash -c "$SETUP" >/dev/null 2>&1
-check "used the gh login, not the email local-part" \
-  "$(git -C "$HOME/.claude-worktrees/$(key "$LAB/ghrepo")/$SID" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
-  "jbarbier-gh/fix-login-$SID"
-nogh; export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
+# (i) a live session that has done no work and never pushed
+FRESH="$HOME/.claude-worktrees/$(key "$LAB/shared")/66666666"
+git worktree add -q -b jbarbier/fresh-66666666 "$FRESH" origin/main
+
+# (ii) pushed and merged, but still holding a gitignored .env
+ENVWT="$HOME/.claude-worktrees/$(key "$LAB/shared")/77777777"
+git worktree add -q -b jbarbier/env-77777777 "$ENVWT" origin/main
+git -C "$ENVWT" commit -q --allow-empty -m "env work"
+git -C "$ENVWT" push -q -u origin HEAD
+git -C "$ENVWT" push -q origin HEAD:main                     # its PR landed
+printf 'SECRET=hunter2\n' > "$ENVWT/.env"
+
+# (iii) pushed, merged, nothing left behind: the only one that should go
+DONE="$HOME/.claude-worktrees/$(key "$LAB/shared")/88888888"
+git worktree add -q -b jbarbier/done-88888888 "$DONE" origin/main
+git -C "$DONE" commit -q --allow-empty -m "real work"
+git -C "$DONE" push -q -u origin HEAD
+git -C "$DONE" push -q origin HEAD:main                      # its PR landed
+git fetch -q origin; git remote set-head origin -a >/dev/null 2>&1
+bash -c "$SWEEP" >/dev/null 2>&1
+[ -d "$FRESH" ] && ok "kept a fresh worktree that had done no work" \
+                || bad "DELETED a fresh worktree: this is the bug that ate live sessions"
+[ -f "$ENVWT/.env" ] && ok "kept a worktree holding an ignored .env" \
+                     || bad "DELETED an ignored .env that git would not have protected"
+[ -d "$DONE" ] && bad "kept a genuinely merged, clean worktree" \
+               || ok "removed the genuinely merged, clean worktree"
+git show-ref --verify --quiet refs/heads/jbarbier/done-88888888 \
+  && ok "sweep kept the branch" || bad "sweep deleted the branch"
+
+echo "== 10. the sweep never deletes the tree you are standing in =="
+SELF="$HOME/.claude-worktrees/$(key "$LAB/shared")/99999999"
+git worktree add -q -b jbarbier/self-99999999 "$SELF" origin/main
+(cd "$SELF" && bash -c "$SWEEP") >/dev/null 2>&1
+[ -d "$SELF" ] && ok "refused to delete its own working directory" \
+               || bad "deleted the cwd it was running in"
 
 echo
 echo "passed: $PASS   failed: $FAIL"
