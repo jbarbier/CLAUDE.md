@@ -22,9 +22,10 @@ You can outsource the typing. You cannot outsource the understanding. Before you
 Size: small | medium | large — why
 Tests: local (which ones) | full suite — why
 Agents: solo | fan-out (how many, on what) — why
+Branch: <branch name> in <worktree path> — see "Branching"
 ```
 
-This block is mandatory and verbose on purpose. Julien reads it to see what mode was picked and to tune these rules over time. A wrong mode is only correctable if the choice is visible. Never skip it, never bury it mid-report.
+This block is mandatory and verbose on purpose. Julien reads it to see what mode was picked and to tune these rules over time. A wrong mode is only correctable if the choice is visible. Never skip it, never bury it mid-report. The Branch line is there so that with several sessions running at once, Julien can tell at a glance which one is about to touch what.
 
 **The sizes:**
 
@@ -38,6 +39,109 @@ This block is mandatory and verbose on purpose. Julien reads it to see what mode
 - Escalate the moment the change turns out bigger than triaged (touches a contract, spreads across services, needs judgment). Print an updated triage block right then, with what changed the call.
 - "Test what you touch" is the default. The full suite is for large changes and contract changes. The blast radius decides, not habit: if the diff cannot reach code outside the touched module, running that module's tests IS the complete verification.
 - The final report restates what was actually run (which tests, which agents) so the triage call can be judged after the fact.
+
+## Branching — one session, one worktree, one branch
+
+**This section is non-negotiable and must never be removed.** It runs before the first edit of every task, right after the triage block.
+
+Two facts hold at once: Julien works with other people, so nothing lands on `main` directly; and several Claude Code sessions run on the same machine, in the same repo, at the same time.
+
+**Creating a branch does not isolate a session.** Every session started in the same directory shares one working tree. The moment session B runs `git switch -c`, session A's files change on disk underneath it, mid-edit. Session A then commits B's tree, or fails a test for reasons that live in another conversation. The branch name is not what collides, the working tree is, so the fix belongs at the working tree.
+
+**The rule: the worktree is the session. The branch is the task.** Each session gets its own git worktree, keyed by its session id, and makes as many task branches inside it as it likes. Git enforces the separation rather than trusting anyone to remember it: it refuses to check out one branch in two worktrees.
+
+**Setup — once per session, before the first write.** Run it from the shared checkout. `SLUG` is the only blank to fill: lowercase, dash separated, three words at most (`fix-login`, `stripe-webhook-retry`).
+
+```bash
+SLUG=fix-login                                                    # <- the task, kebab-case
+SID=${CLAUDE_CODE_SESSION_ID:0:8}
+ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+KEY=$(basename "$ROOT")-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)   # unique per repo PATH
+WT="$HOME/.claude-worktrees/$KEY/$SID"
+
+OWNER=$(git config claude.branchPrefix)
+[ -n "$OWNER" ] || OWNER=$(gh api user --jq .login 2>/dev/null)
+[ -n "$OWNER" ] || OWNER=$(git config user.email | cut -d@ -f1)
+[ -n "$OWNER" ] || { echo "STOP: git config --global claude.branchPrefix YOUR_HANDLE"; exit 1; }
+git config --global claude.branchPrefix "$OWNER"                  # cache only a non-empty value
+
+git fetch -q origin 2>/dev/null
+git remote set-head -a origin >/dev/null 2>&1                     # repair origin/HEAD if unset
+BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
+for c in origin/main origin/master main master; do
+  [ -n "$BASE" ] && break
+  git rev-parse -q --verify "$c" >/dev/null && BASE=$c
+done
+[ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
+
+if [ -e "$WT" ]; then echo "re-attaching to existing worktree"     # resumed session
+else git worktree add -b "$OWNER/$SLUG-$SID" "$WT" "$BASE"; fi
+echo "WORKTREE $WT"                                                # path stays in the transcript
+```
+
+Run that block as a unit; each Claude Code Bash call is already its own shell, so the `exit 1` lines are failure stops, not something that ends your session. Pasting it into your own terminal by hand is the one case where that matters: use `bash -c` there.
+
+Then move the session into it: call `EnterWorktree` with `path` set to the `WORKTREE` path the block just printed (this section is the project instruction that authorizes that tool). Outside Claude Code, `cd` to it. The block prints the path on purpose, because `$WT` is gone by the next tool call.
+
+**Then bootstrap the worktree, before the first test run.** A worktree contains tracked files only. `.env`, `node_modules/`, virtualenvs, build caches and everything else gitignored are absent, so the first command you run fails for a reason that has nothing to do with your change, and the obvious next move — debugging it — is wasted. Copy or symlink the ignored files the project actually needs and run its install step once, when the worktree is created. Never commit those files to fix this.
+
+- **The branch prefix comes from the GitHub login, not the email.** They are often different: a `user.email` local-part can be an old handle teammates have never seen. Resolve it once, cache it, and let Julien override it with `git config --global claude.branchPrefix`. Never cache an empty value: `git config` returns success on an empty string, so one bad write poisons every repo until someone unsets it by hand.
+- **Base off the remote default branch, never local HEAD.** A session that branches off whatever the shared checkout is sitting on inherits another session's half-finished work. Do not hardcode `origin/main`: plenty of repos are `master`, and `origin/HEAD` is unset on any repo built with `git init` plus `git remote add`.
+- **Shell variables do not survive between tool calls.** `SID`, `WT`, `OWNER` and `BASE` are gone by the next command, so every snippet here re-derives what it needs. Re-derive, don't remember.
+- **Second task, same session: new branch, same worktree, clean tree first.** `git switch -c` carries uncommitted work onto the new branch, which quietly contaminates the next task with the last one. From inside the worktree:
+
+  ```bash
+  SLUG=next-task                                                  # <- the new task
+  git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
+  git fetch -q origin
+  git switch -c "$(git config claude.branchPrefix)/$SLUG-${CLAUDE_CODE_SESSION_ID:0:8}" \
+    "$(git symbolic-ref -q --short refs/remotes/origin/HEAD)"
+  ```
+
+  Never a second worktree.
+- **Resuming re-attaches, it does not duplicate.** The path is derived from the session id, so re-running the setup block finds the existing worktree and enters it instead of erroring. Do not "fix" a resume by adding a second worktree.
+
+**The guard — run it before the first write of every task, and after any compaction.**
+
+```bash
+ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+KEY=$(basename "$ROOT")-$(printf %s "$ROOT" | cksum | cut -d' ' -f1)
+WANT=$(cd "$HOME/.claude-worktrees/$KEY/${CLAUDE_CODE_SESSION_ID:0:8}" 2>/dev/null && pwd -P)
+[ -n "$WANT" ] && [ "$(git rev-parse --show-toplevel)" = "$WANT" ] \
+  || echo "WRONG TREE — stop, set up the worktree"
+```
+
+Both sides are resolved with `pwd -P` on purpose. `git rev-parse --show-toplevel` resolves symlinks and `$HOME` does not, so comparing them raw reports WRONG TREE forever on any machine whose home directory is a symlink. A guard that cries wolf is worse than no guard: it teaches you to ignore the one check that stops the collision.
+
+If it trips, stop. Do not edit, do not commit, do not "just switch the branch quickly". Set the worktree up and start again. If you already changed files in the shared checkout before noticing, do not throw them away and do not commit them there: `git stash -u` in the shared checkout, run the setup, then `git stash pop` inside the new worktree.
+
+**Sub-agents share the parent's worktree, so parallel builders must not.** Sub-agents inherit the parent's `CLAUDE_CODE_SESSION_ID` verbatim and resolve to the parent's worktree. For a sub-agent that only reads, or for units that run one after another, that is correct and cheap. But two builders editing the same files in one working tree is the collision this whole section exists to prevent, just moved inside a single session. So: **any sub-agents that write in parallel — every variant tournament in "Fan-out + harsh critic", and any fan-out whose units touch overlapping files — must be launched with `isolation: "worktree"`**, which makes the harness give each one its own tree. Read-only and strictly sequential sub-agents may share the parent's.
+
+**Shipping the branch (see also "After every task"):** rebase on the base branch, push with `-u`, open a PR, and let a human merge it. Never push to `main`, and never merge your own PR unless Julien says so.
+
+**After the first push, rebase means `--force-with-lease`.** Rebasing rewrites commits you already pushed, so the next plain `push` is rejected as non-fast-forward. On your own session branch — the one named after your handle and your session id, which by construction nobody else is working on — `git push --force-with-lease` is the correct move and needs no confirmation. This is the one carve-out from the force-push ban in "Safety"; `--force-with-lease` still refuses if anyone else has pushed. It does not extend to shared branches, and never to `main`.
+
+**Cleanup.** Worktrees are not free: each one is a full checkout of tracked files, and the session that owned it is gone by the time its PR merges, so nobody is left to tidy up unless tidying is part of setup. Sweep the merged ones whenever you set up a new worktree, and remove your own when you are done:
+
+```bash
+ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
+git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' |
+  grep "/\.claude-worktrees/" | while read -r w; do
+    b=$(git -C "$w" branch --show-current)
+    [ -n "$b" ] && git merge-base --is-ancestor "$b" "$BASE" 2>/dev/null &&
+      git worktree remove "$w"                    # refuses if work is uncommitted: good
+  done
+git worktree prune
+```
+
+`git worktree remove` refusing a dirty worktree is a feature, not an obstacle. Check what is in there before reaching for `--force`; unpushed work is exactly what this rule exists to protect. Removing a worktree never deletes its branch.
+
+Running `git worktree` admin commands against the shared checkout is fine and is not "working" in it. To get back there from inside a worktree, use `ExitWorktree` with `keep` (it returns the session to the original directory and leaves worktrees made by `git worktree add` alone).
+
+**Never:** edit or commit in the shared checkout, run `git switch` or `git checkout` there, commit a worktree directory, or share one branch between two sessions.
+
+This applies at every triage size. A one-word typo fix gets a branch too.
 
 ## The two machine spaces — read this before doing anything
 
@@ -152,7 +256,7 @@ No reference, no build. If you can't write down what "wowed" means for this task
 
 **The loop, for every task triaged large:**
 
-1. **Decompose and fan out.** Independent units, one builder sub-agent per unit, run in parallel via the Workflow tool or isolated sessions/worktrees. Serial work on parallelizable units is wasted wall-clock. Every new feature gets a variant tournament, no exceptions: 2-3 competing builders on the SAME unit, so the critic has variants to compare blind. For other unit types (fixes, docs, perf), run a tournament whenever the unit is judgment-heavy (design, approach, UX).
+1. **Decompose and fan out.** Independent units, one builder sub-agent per unit, run in parallel via the Workflow tool or isolated sessions/worktrees. Serial work on parallelizable units is wasted wall-clock. Every new feature gets a variant tournament, no exceptions: 2-3 competing builders on the SAME unit, so the critic has variants to compare blind. Because they write the same files at the same time, tournament builders are launched with `isolation: "worktree"` — see "Branching", where sharing one working tree between parallel writers is exactly the failure being designed out. For other unit types (fixes, docs, perf), run a tournament whenever the unit is judgment-heavy (design, approach, UX).
 2. **Builder never grades its own work.** Every unit's output goes to a separate critic sub-agent that had no part in building it and never sees the builder's reasoning. Deliverable plus reference only; a critic that reads the builder's justification pre-agrees with it. Self-review does not count as review.
 3. **The critic is harsh by default; its job is to reject.** Blind wherever comparison exists: outputs labeled A/B in random order (ours vs. the reference, or variant vs. variant) so the critic doesn't know which is ours. The verdict must be concrete: which is better and exactly why. "Pretty good" is a FAIL. "Acceptable" is a FAIL. It passes only when the critic is genuinely wowed and would pick ours (or can't tell) in the blind comparison.
 4. **Loop until pass.** Builder revises against the critic's named findings. A fresh critic re-judges cold each round, no memory of wanting to be nice. A pass requires the critic's explicit verdict, never the builder's claim.
@@ -198,7 +302,7 @@ Reporting a completion status is not the end of the task. Before the final repor
 
 Once a task is done, two things happen, no exceptions:
 
-1. **Commit and push.** Stage the work, write a clear commit message, push to GitHub. Don't wait to be asked. Respects the Safety rules (no secrets, no `--no-verify`, no destructive ops without confirmation).
+1. **Commit, push the branch, open the PR.** Stage the work, write a clear commit message, then `git fetch origin && git rebase "$(git symbolic-ref -q --short refs/remotes/origin/HEAD)"`, `git push -u origin HEAD` (`git push --force-with-lease` on later rounds, since the rebase rewrote commits you already pushed), and open a PR with `gh pr create` (title, what changed, how it was tested, the measurable outcome). Don't wait to be asked. Print the PR URL in the final report. A human merges it; you do not, unless Julien says so. Respects the Safety rules (no secrets, no `--no-verify`, no destructive ops without confirmation) and the branching rules (never commit on `main`, never push to `main`).
 2. **Report what to restart.** Tell Julien exactly which service / system / program needs to be restarted for the change to take effect, with the full list of commands to run. If nothing needs restarting, say so explicitly.
 
 For restart commands that need `sudo`: never run them yourself. List them for Julien to run, clearly marked as his to execute.
@@ -236,7 +340,7 @@ STOP. Name the ambiguity in one sentence. Present 2-3 options with real trade-of
 ## Safety
 
 - Never commit secrets. If `.env` is touched, verify `.gitignore` before any commit.
-- Never run `rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, `kubectl delete`, or similar destructive ops without explicit confirmation.
+- Never run `rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, `kubectl delete`, or similar destructive ops without explicit confirmation. One carve-out, defined in "Branching": `git push --force-with-lease` on your own session branch after a rebase. That is the normal way to update a PR, it refuses if anyone else has pushed, and it never applies to a shared branch or to `main`.
 - Never skip pre-commit hooks with `--no-verify`. If a hook fails, fix the underlying issue.
 - Never commit binaries, compiled outputs, or model weights to the repo. Use Git LFS or cloud storage with a pointer.
 - Before any action that touches production, state what you're about to do, wait for confirmation.

@@ -1,6 +1,6 @@
 # CLAUDE.md — a working contract for coding agents
 
-This repo is a single file: [`CLAUDE.md`](./CLAUDE.md). It is the instruction set I give Claude Code (and any other coding agent) at the start of every session. It tells the agent how to think, when to write code instead of guessing, what "done" means, and how to talk to me.
+This repo is one file that matters: [`CLAUDE.md`](./CLAUDE.md). It is the instruction set I give Claude Code (and any other coding agent) at the start of every session. (`tests/` and `evals/` exist only to prove the shell commands inside it actually work; copy `CLAUDE.md` alone if you like.) It tells the agent how to think, when to write code instead of guessing, what "done" means, and how to talk to me.
 
 It is opinionated on purpose. Most of the ideas come from [Andrej Karpathy](https://x.com/karpathy) and [Garry Tan](https://x.com/garrytan). The fan-out + harsh critic loop is adapted from [Matt Shumer](https://x.com/mattshumer_), who runs it to replicate games (independent builder sub-agents per unit, a separate harsh critic judging blind side by side, loop until perfect); here it is generalized to any work. The self-rating rule (score your own work, loop until proud) comes from a [Nick Stinemates](https://x.com/nickstinemates) tweet. Some are mine.
 
@@ -57,6 +57,18 @@ If your tool does not follow symlinks, just copy the file and rename it. The rul
 
 ---
 
+## The commands in it are tested
+
+Most of `CLAUDE.md` is judgement you cannot unit-test. The branching section is not: it hands you shell commands to copy, and a rules file whose commands are wrong is worse than no rules file. So those commands are extracted from the markdown and executed against throwaway repos:
+
+```bash
+bash tests/run.sh
+```
+
+The suite creates its own git repos under `$TMPDIR` with an overridden `$HOME`, so it never touches your repos or your `~/.gitconfig`. It checks the things that actually bite: that two sessions cannot stomp each other, that re-running setup re-attaches instead of erroring, that a snippet never reads a shell variable a previous tool call set, and that the base branch is the remote default rather than whatever the shared checkout was sitting on. If you edit those commands, run it again.
+
+Those tests prove the commands work. They cannot prove the section is followable, which is the other half of a rules file. That is what [`evals/branching_scenario.md`](./evals/branching_scenario.md) is for: hand a fresh model the branching section alone and see whether it produces the right commands cold, graded by `evals/grade_branching.sh`. Re-run it when you change the section or change model generation, and keep the negative control — an answer of `git checkout -b my-fix` has to FAIL, because that is the exact mistake the section exists to prevent.
+
 ## Make it yours (replace my name)
 
 The file refers to me by name in several places ("impress Julien", "ask Julien", "tell Julien what to restart"). The agent uses that name as the human it answers to. Swap it for yours:
@@ -74,3 +86,4 @@ While you are in there, decide what else to change:
 - **`food_vision/classifier.py:47`** in the talk-style section is just an example. Leave it; it only shows the format the agent should use when pointing at code.
 - **The LLM-access rule** ("route through local Claude Code, never an external API") is specific to my setup. If you call the Anthropic or OpenAI API directly, delete that whole block or invert it.
 - **The gstack / skills references** assume you have Garry Tan's [gstack](https://github.com/garrytan/gstack) installed. If you do not, the "check for skills" rule still works, it just has fewer skills to find.
+- **The branching rule** ("one session, one worktree, one branch") assumes you work on a team and review through pull requests. It gives every Claude Code session its own git worktree so two sessions in the same repo stop yanking the branch out from under each other. It picks your branch prefix from your GitHub login; set it explicitly with `git config --global claude.branchPrefix YOUR_HANDLE`. If you work solo and commit straight to `main`, delete the section.
