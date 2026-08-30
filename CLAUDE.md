@@ -50,7 +50,7 @@ Two facts hold at once: Julien works with other people, so nothing lands on `mai
 
 Throughout: the **shared checkout** is the original clone, the one everybody's `cd` lands in and the one `git worktree list` prints first. Nobody works there.
 
-**Setup — once per session, before the first write.** Run it from the shared checkout, as one unit. `SLUG` is the only blank: lowercase, dash separated, three words at most.
+**Setup — once per session, before the first write.** Run it from the shared checkout, as one unit. Each Bash tool call is its own shell, so the `exit 1` lines stop the block, not your session; pasting it by hand is the one case where that bites, so use `bash -c` there. `SLUG` is the only blank: lowercase, dash separated, three words at most.
 
 ```bash
 SLUG=fix-login                                                    # <- the task, kebab-case
@@ -99,7 +99,7 @@ git submodule update --init --recursive 2>/dev/null   # worktrees do not inherit
 # then the project's own install/build step, e.g. npm ci / uv sync / bundle install
 ```
 
-Adjust to the project, never commit these files to fix this. **The worktree isolates files in the repo and nothing else:** that copied `.env` points both sessions at one database and one port, so two sessions migrate the same schema and each reads the other's failure as its own bug. Before the first run, fork the single-writer handles (db name, port, container names) with `${CLAUDE_CODE_SESSION_ID:0:8}`. Prose, not a snippet: the names belong to the project, not to git.
+Adjust to the project, never commit these files to fix this. **The worktree isolates files in the repo and nothing else:** that copied `.env` points both sessions at one database and one port, so two sessions migrate the same schema and each reads the other's failure as its own bug. Before the first run, fork the single-writer handles (db name, port, container names) with `${CLAUDE_CODE_SESSION_ID:0:8}`, and drop those forks when the task ends, the same way you drop the worktree. Prose, not a snippet: the names belong to the project, not to git.
 
 **Second task, same session: new branch, same worktree, clean tree first.** Never a second worktree.
 
@@ -165,7 +165,7 @@ git worktree prune
 
 Removing a worktree never deletes its branch. `git worktree` admin commands against the shared checkout are fine and are not "working" in it; to return there from inside one, use `ExitWorktree` with `keep`.
 
-Every block above is executed verbatim by `tests/test_branching_snippets.sh` in this repo, one case per bug that bit. Change a line, run it. That suite is why the reasons can stay this short.
+Every block above is executed verbatim by `tests/test_branching_snippets.sh` at [github.com/jbarbier/CLAUDE.md](https://github.com/jbarbier/CLAUDE.md), one case per bug that bit. That suite is why the reasons here can stay this short. Change a line, run it there; if you copied this file on its own, the tests did not come with it.
 
 **Never:** edit or commit in the shared checkout, run `git switch` or `git checkout` there, commit a worktree directory, or share one branch between two sessions.
 
