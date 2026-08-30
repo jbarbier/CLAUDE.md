@@ -93,3 +93,18 @@ While you are in there, decide what else to change:
 - **The LLM-access rule** ("route through local Claude Code, never an external API") is specific to my setup. If you call the Anthropic or OpenAI API directly, delete that whole block or invert it.
 - **The gstack / skills references** assume you have Garry Tan's [gstack](https://github.com/garrytan/gstack) installed. If you do not, the "check for skills" rule still works, it just has fewer skills to find.
 - **The branching rule** ("one session, one worktree, one branch") assumes you work on a team and review through pull requests. It gives every Claude Code session its own git worktree so two sessions in the same repo stop yanking the branch out from under each other. It picks your branch prefix from your GitHub login; set it explicitly with `git config --global claude.branchPrefix YOUR_HANDLE`. If you work solo and commit straight to `main`, delete the section.
+
+---
+
+## What the branching rule does not do
+
+The branching section solves one problem: several agent sessions in one repo stop pulling the working tree out from under each other, and nothing lands on `main` by accident. It stops there. None of the below blocks me day to day, which is why I left it alone. If one of them blocks you, edit the section. It is one markdown file.
+
+- **It isolates files in the repo, nothing else.** Two sessions still share one database, one dev port, one redis, one docker container name, one global pnpm store, one browser profile for e2e tests. The file tells you to fork the handles that actually bite (db name, port) with the session id. It does not try to list them all, because that list is never finished. If your stack has more shared single-writer resources than a database and a port, the honest fix is a per-session `HOME` and `XDG_*`, plus something to reclaim ports after a crash. That is machinery this file deliberately does not carry.
+- **In practice it is Claude Code only.** The setup block keys the worktree on `CLAUDE_CODE_SESSION_ID`, which Claude Code sets and other agents do not. Under Codex or Gemini the block stops and says why, on purpose: the alternative is every session silently sharing one tree. To use it there, swap `SID` for any per-session id your tool gives you.
+- **Sessions that ran inside a worktree do not show up in `/resume`.** Claude Code lists past sessions by working directory, and the point of this rule is that the session's directory is not the repo. Reopen one with `cd <worktree path> && claude --resume <session-id>`. The transcript survives even after the worktree is swept.
+- **Disk.** A worktree is a full checkout of your tracked files, so five sessions means five copies. Cleanup is a command you run, never automatic, because a sweep on a timer eventually fires while someone is mid-task.
+- **The sweep does not catch everything.** A branch with more than one commit that was merged with GitHub's "Squash and merge" collapses into a patch matching none of its parts, so its worktree is kept. Closing that needs a GitHub API call inside a block that is otherwise pure git. Remove those by hand with `git worktree remove <path>`.
+- **Sub-agents share the parent's worktree.** They inherit the parent's session id, so they resolve to the same tree. That is right for readers and for units that run one after another, and wrong for two builders editing at once, which is why the file says to launch parallel writers with `isolation: "worktree"`.
+
+If none of this applies to you, delete the whole branching section. A solo developer committing to `main` needs none of it.
