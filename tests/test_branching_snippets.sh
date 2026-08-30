@@ -127,6 +127,44 @@ echo "$GSUB" | grep -q "WRONG TREE" && ok "fires from a subdirectory of the shar
 GWSUB=$(cd "$WA/src/deep" && bash -c "$GUARD" 2>&1)
 check "silent from a subdirectory of a worktree" "$GWSUB" ""
 
+echo "== 5b. solo mode: no worktree, no PR, and the guard goes quiet =="
+mkrepo "$LAB/solo"
+cd "$LAB/solo" || exit 1
+git config claude.mode solo
+SOUT=$(CLAUDE_CODE_SESSION_ID=cccc3333 bash -c "$(echo "$SETUP" | sed 's/^SLUG=fix-login/SLUG=solo-task/')" 2>&1)
+echo "$SOUT" | grep -q "^SOLO solo-task$" && ok "setup reports SOLO and the branch" \
+                                          || bad "got: $SOUT"
+check "made no worktree" "$(git worktree list | wc -l)" "1"
+check "switched to the task branch" "$(git branch --show-current)" "solo-task"
+# solo must not need a session id: that is the whole point for non-Claude agents
+git switch -q "$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|origin/||')"
+git branch -qD solo-task
+SOUT2=$(env -u CLAUDE_CODE_SESSION_ID bash -c "$(echo "$SETUP" | sed 's/^SLUG=fix-login/SLUG=no-sid/')" 2>&1)
+echo "$SOUT2" | grep -q "^SOLO no-sid$" && ok "works with no session id set" \
+                                        || bad "got: $SOUT2"
+# the dirty-tree trap the team path has: switch -c would carry the work over
+echo dirt > dirty.txt
+SOUT3=$(bash -c "$(echo "$SETUP" | sed 's/^SLUG=fix-login/SLUG=dirty-task/')" 2>&1)
+echo "$SOUT3" | grep -q "STOP: commit or stash first" && ok "refuses a dirty tree" \
+                                                      || bad "got: $SOUT3"
+rm -f dirty.txt
+# and the guard must be silent here: the shared checkout IS the workplace in solo
+GSOLO=$(bash -c "$GUARD" 2>&1)
+check "guard silent in solo mode" "$GSOLO" ""
+# flipping back to team must restore the alarm, or the switch is a one-way door
+git config claude.mode team
+GTEAM=$(bash -c "$GUARD" 2>&1)
+echo "$GTEAM" | grep -q "WRONG TREE" && ok "guard fires again after mode=team" \
+                                     || bad "guard stayed quiet in team mode: '$GTEAM'"
+# unset must behave as team, since that is the documented default
+git config --unset claude.mode
+GUNSET=$(bash -c "$GUARD" 2>&1)
+echo "$GUNSET" | grep -q "WRONG TREE" && ok "unset mode defaults to team" \
+                                      || bad "unset mode behaved as solo: '$GUNSET'"
+SOUT4=$(CLAUDE_CODE_SESSION_ID=dddd4444 bash -c "$(echo "$SETUP" | sed 's/^SLUG=fix-login/SLUG=team-task/')" 2>&1)
+echo "$SOUT4" | grep -q "^WORKTREE " && ok "unset mode still builds a worktree" \
+                                     || bad "got: $SOUT4"
+
 echo "== 6. repo paths with spaces, master default, and no remote at all =="
 mkdir -p "$LAB/my app"; mkrepo "$LAB/my app/proj"; cd "$LAB/my app/proj" || exit 1
 run_setup 11111111-x fix-login >/dev/null 2>&1
