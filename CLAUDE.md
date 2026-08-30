@@ -50,10 +50,37 @@ Two facts hold at once: Julien works with other people, so nothing lands on `mai
 
 Throughout: the **shared checkout** is the original clone, the one everybody's `cd` lands in and the one `git worktree list` prints first. Nobody works there.
 
+**One line turns the worktree off: `git config claude.mode solo`.** Repo-local, and `team` is the default when unset, so a repo you never configure keeps the full ritual. In `solo` mode there is no worktree and no PR: you branch in the checkout you are standing in and merge it yourself. The branch stays, because it costs nothing and keeps a bad change off `main` where one command drops it.
+
+Solo is about **people**, not sessions, and those are two different problems. The PR exists because someone else reviews your work. The worktree exists because two agent sessions in one checkout overwrite each other, and that happens on a project you own alone just as easily. So `solo` means *one session at a time in this repo*. Start a second one and the collision this section exists to prevent is back with nothing to catch it, so set `git config claude.mode team` first.
+
 **Setup — once per session, before the first write.** Run it from the shared checkout, as one unit. Each Bash tool call is its own shell, so the `exit 1` lines stop the block, not your session; pasting it by hand is the one case where that bites, so use `bash -c` there. `SLUG` is the only blank: lowercase, dash separated, three words at most.
 
 ```bash
 SLUG=fix-login                                                    # <- the task, kebab-case
+
+# Remote default branch, never local HEAD (that inherits another session's work).
+# The ladder is because plenty of repos are master and origin/HEAD is often unset.
+# Resolved before the mode split: solo needs the same base, or task two stacks
+# on task one and lands both in one merge.
+git fetch -q origin 2>/dev/null
+git remote set-head -a origin >/dev/null 2>&1
+BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
+for c in origin/main origin/master main master; do
+  [ -n "$BASE" ] && break
+  git rev-parse -q --verify "$c" >/dev/null && BASE=$c
+done
+[ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
+
+# solo: no worktree, no owner prefix, no session id, so it also works under
+# agents that set no session variable. switch -c would carry uncommitted work
+# onto the new branch, which is what the clean check is for.
+if [ "$(git config claude.mode)" = solo ]; then
+  git status --porcelain | grep -q . && { echo "STOP: commit or stash first"; exit 1; }
+  git switch -qc "$SLUG" "$BASE" || exit 1
+  echo "SOLO $SLUG"; exit 0
+fi
+
 SID=${CLAUDE_CODE_SESSION_ID:0:8}
 [ -n "$SID" ] || { echo "STOP: CLAUDE_CODE_SESSION_ID is unset, every session would share one worktree"; exit 1; }
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
@@ -67,17 +94,6 @@ OWNER=$(git config claude.branchPrefix)
 [ -n "$OWNER" ] || OWNER=$(git config user.email | cut -d@ -f1)
 [ -n "$OWNER" ] || { echo "STOP: git config claude.branchPrefix YOUR_HANDLE"; exit 1; }
 git config claude.branchPrefix "$OWNER"
-
-# Remote default branch, never local HEAD (that inherits another session's work).
-# The ladder is because plenty of repos are master and origin/HEAD is often unset.
-git fetch -q origin 2>/dev/null
-git remote set-head -a origin >/dev/null 2>&1
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD)
-for c in origin/main origin/master main master; do
-  [ -n "$BASE" ] && break
-  git rev-parse -q --verify "$c" >/dev/null && BASE=$c
-done
-[ -n "$BASE" ] || { echo "STOP: cannot find a base branch"; exit 1; }
 
 if git worktree list --porcelain | grep -qFx "worktree $WT"; then   # resumed session
   echo "re-attaching to existing worktree"
@@ -103,7 +119,7 @@ git submodule update --init --recursive 2>/dev/null   # worktrees do not inherit
 
 Adjust to the project, never commit these files to fix this. **The worktree isolates files in the repo and nothing else:** that copied `.env` points both sessions at one database and one port, so two sessions migrate the same schema and each reads the other's failure as its own bug. Before the first run, fork the single-writer handles (db name, port, container names) with `${CLAUDE_CODE_SESSION_ID:0:8}`, and drop those forks when the task ends, the same way you drop the worktree. Prose, not a snippet: the names belong to the project, not to git.
 
-**Second task, same session: new branch, same worktree, clean tree first.** Never a second worktree.
+**Second task, same session: new branch, same worktree, clean tree first.** Never a second worktree. In `solo` mode this block is the whole ritual: it is what the setup block already did.
 
 ```bash
 SLUG=next-task                                                  # <- the new task
@@ -130,16 +146,17 @@ git switch -c "$(git config claude.branchPrefix)/$SLUG-${CLAUDE_CODE_SESSION_ID:
 # --path-format=absolute is load-bearing: from a subdirectory the common dir comes
 # back relative ("../.git"), the two stop matching, and the guard goes silent in
 # the shared checkout, which is the one direction that must never happen.
-[ "$(git rev-parse --path-format=absolute --git-dir)" \
-= "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
-  && echo "WRONG TREE — you are in the shared checkout, set up a worktree"
+[ "$(git config claude.mode)" = solo ] \
+|| [ "$(git rev-parse --path-format=absolute --git-dir)" \
+!= "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
+  || echo "WRONG TREE — you are in the shared checkout, set up a worktree"
 ```
 
 If it trips, stop. Do not edit, commit, or "just switch the branch quickly". If you already changed files there, don't discard them and don't commit them: `git stash -u`, run setup, `git stash pop` inside the worktree.
 
 **Sub-agents share the parent's worktree**, since they inherit its session id. Fine for readers and for units that run in sequence. Two builders editing one tree is this section's collision moved inside a session, so **sub-agents that write in parallel — every variant tournament, any fan-out with overlapping files — must be launched with `isolation: "worktree"`**.
 
-**Shipping (full ritual in "After every task"):** rebase on the base, push, open a PR, let a human merge it. Never push to `main`, never merge your own PR unless Julien says so. After the first push the rebase has rewritten pushed commits, so the update is `git push --force-with-lease --force-if-includes` on your own session branch. Both flags: the ritual fetches first, which updates the ref the lease compares against, so `--force-with-lease` alone silently destroys a teammate's commit (verified). `--force-if-includes` is the one that refuses. Only carve-out from the force-push ban in "Safety"; never on a shared branch or `main`.
+**Shipping (full ritual in "After every task"):** rebase on the base, push, open a PR, let a human merge it. Never push to `main`, never merge your own PR unless Julien says so. In `solo` mode: rebase, merge your own branch into the base, push, no PR. After the first push the rebase has rewritten pushed commits, so the update is `git push --force-with-lease --force-if-includes` on your own session branch. Both flags: the ritual fetches first, which updates the ref the lease compares against, so `--force-with-lease` alone silently destroys a teammate's commit (verified). `--force-if-includes` is the one that refuses. Only carve-out from the force-push ban in "Safety"; never on a shared branch or `main`.
 
 **Cleanup is a manual command, never part of setup.** A sweep that runs automatically eventually runs while somebody is mid-task, so it runs when Julien asks, from the shared checkout. Each `continue` is a bug that bit:
 
