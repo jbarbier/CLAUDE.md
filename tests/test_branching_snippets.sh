@@ -116,6 +116,16 @@ check "silent in a harness-provided worktree (no re-derivation fight)" "$GH_" ""
 mkdir -p "$LAB/linkhome"; ln -s "$LAB/home" "$LAB/linkhome/h"
 GS=$(cd "$LAB/linkhome/h/.claude-worktrees/$(key "$LAB/shared")/aaaa1111" 2>/dev/null && bash -c "$GUARD" 2>&1)
 check "silent when reached through a symlinked path" "$GS" ""
+# Run from a SUBDIRECTORY, both sides. git rev-parse returns --git-common-dir
+# relative to the cwd unless --path-format=absolute is asked for, so a guard that
+# drops that flag goes SILENT in the shared checkout, which is the failure that
+# actually loses work. Pin both directions.
+mkdir -p "$LAB/shared/src/deep" "$WA/src/deep"
+GSUB=$(cd "$LAB/shared/src/deep" && bash -c "$GUARD" 2>&1)
+echo "$GSUB" | grep -q "WRONG TREE" && ok "fires from a subdirectory of the shared checkout" \
+                                    || bad "SILENT from a subdirectory of the shared checkout: '$GSUB'"
+GWSUB=$(cd "$WA/src/deep" && bash -c "$GUARD" 2>&1)
+check "silent from a subdirectory of a worktree" "$GWSUB" ""
 
 echo "== 6. repo paths with spaces, master default, and no remote at all =="
 mkdir -p "$LAB/my app"; mkrepo "$LAB/my app/proj"; cd "$LAB/my app/proj" || exit 1

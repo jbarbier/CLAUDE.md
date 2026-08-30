@@ -89,6 +89,8 @@ echo "WORKTREE $WT"
 
 Then call `EnterWorktree` with `path` set to the `WORKTREE` path it printed (this section is the instruction that authorizes that tool); outside Claude Code, `cd` there. It prints the path because shell variables die between tool calls, which is why every snippet re-derives what it needs. Resuming re-attaches rather than duplicating, but creates no branch: resuming into a new task means running the second-task block.
 
+**Once you are inside, the harness refuses any Bash call it cannot prove stays in the worktree.** That means a multi-line block that reaches into the shared checkout, or builds a path in a variable and `cd`s to it, comes back as "too complex to verify" rather than running. Bootstrap and the second-task block are both that shape. Two ways through, both fine: run the block one plain command at a time, or write it to a file and run `bash the-file.sh`, which is a single in-tree command and is accepted whole. The guard is written to need neither.
+
 **Then bootstrap, before the first test run.** A worktree has tracked files only, so `.env`, `node_modules/` and virtualenvs are absent and your first command fails for reasons unrelated to your change.
 
 ```bash
@@ -122,11 +124,14 @@ git switch -c "$(git config claude.branchPrefix)/$SLUG-${CLAUDE_CODE_SESSION_ID:
 **The guard — before the first write of every task, and after any compaction.** One question: am I about to write in the shared checkout?
 
 ```bash
-# Both sides resolve symlinks (rev-parse does, a raw $HOME does not) or it cries
-# wolf forever on a symlinked home. Any linked worktree passes, so a sub-agent in
-# a harness-provided tree is not sent back into the parent's.
-ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-[ "$(git rev-parse --show-toplevel)" = "$(cd "$ROOT" && pwd -P)" ] \
+# In the shared checkout these two are the same directory; in any linked worktree
+# they differ. No cd, no $HOME, so a symlinked path cannot fool it and an agent
+# session that refuses commands it cannot prove stay in-tree will still run it.
+# --path-format=absolute is load-bearing: from a subdirectory the common dir comes
+# back relative ("../.git"), the two stop matching, and the guard goes silent in
+# the shared checkout, which is the one direction that must never happen.
+[ "$(git rev-parse --path-format=absolute --git-dir)" \
+= "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
   && echo "WRONG TREE — you are in the shared checkout, set up a worktree"
 ```
 
