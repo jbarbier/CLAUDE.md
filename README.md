@@ -53,7 +53,9 @@ Now Claude reads `CLAUDE.md`, Codex reads `AGENTS.md`, Gemini reads `GEMINI.md`,
 | GitHub Copilot | `.github/copilot-instructions.md` | copy the content in |
 | Anything else | usually `AGENTS.md` | `ln -s CLAUDE.md AGENTS.md` |
 
-If your tool does not follow symlinks, just copy the file and rename it. The rules do not care what the file is called.
+This repo ships `AGENTS.md` as exactly that symlink, so an agent working on this repo reads the rules whichever name it looks for. Only that one: `AGENTS.md` is the cross-tool standard, and a second and third alias would be two more files to drift. The table tells you the one command for the others.
+
+If your tool does not follow symlinks, just copy the file and rename it. The rules do not care what the file is called. (Windows checks out symlinks as plain text files holding the target path unless Developer Mode or `core.symlinks=true` is on, so on Windows, copy.)
 
 ---
 
@@ -92,7 +94,7 @@ While you are in there, decide what else to change:
 - **`food_vision/classifier.py:47`** in the talk-style section is just an example. Leave it; it only shows the format the agent should use when pointing at code.
 - **The LLM-access rule** ("route through local Claude Code, never an external API") is specific to my setup. If you call the Anthropic or OpenAI API directly, delete that whole block or invert it.
 - **The gstack / skills references** assume you have Garry Tan's [gstack](https://github.com/garrytan/gstack) installed. If you do not, the "check for skills" rule still works, it just has fewer skills to find.
-- **The branching rule** ("one session, one worktree, one branch") assumes you work on a team and review through pull requests. It gives every Claude Code session its own git worktree so two sessions in the same repo stop yanking the branch out from under each other. It picks your branch prefix from your GitHub login; set it explicitly with `git config --global claude.branchPrefix YOUR_HANDLE`. If you work solo and commit straight to `main`, delete the section.
+- **The branching rule** ("one session, one worktree, one branch") assumes you work on a team and review through pull requests. It gives every Claude Code session its own git worktree so two sessions in the same repo stop yanking the branch out from under each other. It picks your branch prefix from your GitHub login; set it explicitly with `git config --global claude.branchPrefix YOUR_HANDLE`. Working alone, you want the switch rather than the delete key: `git config claude.mode solo` drops the worktree and the PR and leaves you a branch per task.
 
 ---
 
@@ -107,4 +109,34 @@ The branching section solves one problem: several agent sessions in one repo sto
 - **The sweep does not catch everything.** A branch with more than one commit that was merged with GitHub's "Squash and merge" collapses into a patch matching none of its parts, so its worktree is kept. Closing that needs a GitHub API call inside a block that is otherwise pure git. Remove those by hand with `git worktree remove <path>`.
 - **Sub-agents share the parent's worktree.** They inherit the parent's session id, so they resolve to the same tree. That is right for readers and for units that run one after another, and wrong for two builders editing at once, which is why the file says to launch parallel writers with `isolation: "worktree"`.
 
-If none of this applies to you, delete the whole branching section. A solo developer committing to `main` needs none of it.
+If none of this applies to you, run `git config claude.mode solo` and the section costs you one `git switch` per task. Delete it outright only if you commit straight to `main` and never run two agent sessions at once.
+
+---
+
+## Make it shorter
+
+Nothing here is load-bearing for everyone. The file is about 6,600 words and roughly half of it exists for situations you may not be in. What each section costs, measured rather than guessed (counts move as the file does):
+
+| section | words | share | drop it when |
+|---|---:|---:|---|
+| Branching | 2,019 | 31% | you work alone, and there is a switch before there is a delete |
+| Non-negotiable rules | 1,033 | 16% | keep, but the LLM-access rule inside it is mine, not yours |
+| Fan-out + harsh critic | 790 | 12% | you never run multi-agent work |
+| Task sizing | 473 | 7% | keep, it is what stops a typo costing a full protocol run |
+| Background jobs and backfills | 410 | 6% | you run no migrations or backfills |
+| Self-rating | 380 | 6% | keep |
+| Architecture, services-first | 297 | 4% | you have one app, not services |
+| The two machine spaces | 241 | 4% | keep |
+| After every task | 219 | 3% | keep, retune to your git flow |
+| How to work | 205 | 3% | keep, this is the spine |
+| Safety | 150 | 2% | keep |
+| How Julien wants to be talked to | 125 | 2% | keep, rewrite it in your voice |
+| Completion status protocol | 113 | 2% | keep |
+| The context window is the lever | 78 | 1% | keep |
+| Confusion protocol | 76 | 1% | keep |
+
+**Branching is the big one, and the switch beats the delete key.** `git config claude.mode solo` in any repo you work on alone: no worktree, no PR, one branch per task that you merge yourself. You keep the rules and lose the ceremony. Delete the section outright only if you commit straight to `main` and never run two agent sessions at once.
+
+**Dropping Branching, Fan-out, Background jobs and Architecture takes the file from about 6,600 words to about 3,100**, roughly half. Each of those four is a "not my situation" call, not a quality trade-off: you are removing rules for problems you do not have, which is different from lowering the bar on the ones you do.
+
+**What I would not cut, in any project, is about 1,200 words:** How to work, Task sizing, Safety, Completion status, Confusion protocol, the context-window note, and the talk-to-me section rewritten in your voice. That is a complete working rules file on its own. Everything else earns its place only when you have the problem it solves.
